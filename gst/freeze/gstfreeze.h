@@ -43,6 +43,7 @@ struct _GstFreeze
   GstBuffer *current;
   
   guint max_buffers;
+  gint timeout;
 
   gint64 timestamp_offset;
   gint64 offset;
