@@ -44,6 +44,7 @@ enum
 {
   ARG_0,
   ARG_MAX_BUFFERS,
+  ARG_TIMEOUT,
 };
 
 static GstStaticPadTemplate gst_freeze_src_template =
@@ -74,6 +75,8 @@ static gboolean gst_freeze_sink_activate_pull (GstPad * sinkpad,
 static gboolean gst_freeze_sink_event (GstPad * pad, GstEvent * event);
 static void gst_freeze_clear_buffer (GstFreeze * freeze);
 static void gst_freeze_buffer_free (gpointer data, gpointer user_data);
+static void gst_freeze_set_timeout (gpointer data);
+static gboolean gst_freeze_finish_stream (gpointer data);
 
 
 GST_BOILERPLATE (GstFreeze, gst_freeze, GstElement, GST_TYPE_ELEMENT);
@@ -112,6 +115,12 @@ gst_freeze_class_init (GstFreezeClass * klass)
           "max-buffers",
           "Maximum number of buffers", 0, G_MAXUINT, 1,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+  g_object_class_install_property (object_class,
+      ARG_TIMEOUT,
+      g_param_spec_int ("timeout",
+          "timeout",
+          "Timeout before closing stream", 0, G_MAXINT, 1, G_PARAM_READWRITE));
 
   object_class->dispose = gst_freeze_dispose;
 
@@ -165,6 +174,10 @@ gst_freeze_set_property (GObject * object, guint prop_id,
     case ARG_MAX_BUFFERS:
       freeze->max_buffers = g_value_get_uint (value);
       break;
+    case ARG_TIMEOUT:
+      freeze->timeout = g_value_get_int (value);
+      g_print ("set_property, timeout=%d\n", freeze->timeout);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -180,6 +193,9 @@ gst_freeze_get_property (GObject * object, guint prop_id,
   switch (prop_id) {
     case ARG_MAX_BUFFERS:
       g_value_set_uint (value, freeze->max_buffers);
+      break;
+    case ARG_TIMEOUT:
+      g_value_set_int (value, freeze->timeout);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -206,6 +222,7 @@ gst_freeze_change_state (GstElement * element, GstStateChange transition)
     case GST_STATE_CHANGE_NULL_TO_READY:
     case GST_STATE_CHANGE_PAUSED_TO_PLAYING:
       freeze->timestamp_offset = freeze->running_time = 0;
+      gst_freeze_set_timeout (freeze);
       break;
     default:
       break;
@@ -366,6 +383,29 @@ gst_freeze_sink_event (GstPad * pad, GstEvent * event)
   gst_object_unref (freeze);
   return ret;
 
+}
+
+static gboolean
+gst_freeze_finish_stream (gpointer data)
+{
+  GstFreeze *freeze = GST_FREEZE (data);
+  GstState cur_state;
+
+  gst_element_get_state (GST_ELEMENT (freeze), &cur_state, NULL, 0);
+  if (cur_state != GST_STATE_PLAYING)
+    return TRUE;
+
+  gst_pad_push_event (freeze->srcpad, gst_event_new_eos ());
+  return FALSE;
+}
+
+static void
+gst_freeze_set_timeout (gpointer data)
+{
+  GstFreeze *freeze = GST_FREEZE (data);
+
+  if (freeze->timeout > 0)
+    g_timeout_add (freeze->timeout * 1000, gst_freeze_finish_stream, freeze);
 }
 
 static gboolean
