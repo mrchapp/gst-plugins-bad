@@ -1683,7 +1683,12 @@ gst_qt_mux_add_buffer (GstQTMux * qtmux, GstQTPad * pad, GstBuffer * buf)
   } else {
     nsamples = 1;
     sample_size = GST_BUFFER_SIZE (last_buf);
-    if (pad->have_dts) {
+    /* note: by default offset_end will be 0, but qtdemux (and perhaps
+     * others) sets this to -1.  So treat either as invalid values.
+     */
+    if (pad->have_dts &&
+        (GST_BUFFER_OFFSET_END (last_buf) != -1) &&
+        (GST_BUFFER_OFFSET_END (last_buf) != 0)) {
       gint64 scaled_dts;
       pad->last_dts = GST_BUFFER_OFFSET_END (last_buf);
       if ((gint64) (pad->last_dts) < 0) {
@@ -2365,6 +2370,7 @@ gst_qt_mux_video_sink_set_caps (GstPad * pad, GstCaps * caps)
     }
   } else if (strcmp (mimetype, "video/x-h264") == 0) {
     entry.fourcc = FOURCC_avc1;
+    qtpad->have_dts = TRUE;
     if (qtpad->avg_bitrate == 0) {
       gint avg_bitrate = 0;
       gst_structure_get_int (structure, "bitrate", &avg_bitrate);
