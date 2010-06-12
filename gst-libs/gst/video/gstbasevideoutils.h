@@ -37,7 +37,7 @@ typedef struct _GstVideoFrame GstVideoFrame;
 struct _GstVideoState
 {
   GstVideoFormat format;
-  int width, height;
+  int width, height, rowstride;
   int fps_n, fps_d;
   int par_n, par_d;
 

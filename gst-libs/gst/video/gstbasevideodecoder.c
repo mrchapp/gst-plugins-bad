@@ -1453,8 +1453,8 @@ gst_base_video_decoder_set_src_caps (GstBaseVideoDecoder * base_video_decoder)
   if (base_video_decoder->have_src_caps)
     return;
 
-  caps = gst_video_format_new_caps (state->format,
-      state->width, state->height,
+  caps = gst_video_format_new_caps_strided (state->format,
+      state->width, state->height, state->rowstride,
       state->fps_n, state->fps_d, state->par_n, state->par_d);
   gst_caps_set_simple (caps, "interlaced",
       G_TYPE_BOOLEAN, state->interlaced, NULL);
@@ -1478,8 +1478,8 @@ gst_base_video_decoder_alloc_src_frame (GstBaseVideoDecoder *
 
   gst_base_video_decoder_set_src_caps (base_video_decoder);
 
-  num_bytes = gst_video_format_get_size (state->format, state->width,
-      state->height);
+  num_bytes = gst_video_format_get_size_strided (state->format,
+      state->width, state->height, state->rowstride);
   flow_ret =
       gst_pad_alloc_buffer_and_set_caps (GST_BASE_VIDEO_CODEC_SRC_PAD
       (base_video_decoder), GST_BUFFER_OFFSET_NONE, num_bytes,

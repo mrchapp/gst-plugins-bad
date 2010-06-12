@@ -115,7 +115,7 @@ static GstStaticPadTemplate gst_vp8_dec_src_template =
 GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
-    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV ("I420"))
+    GST_STATIC_CAPS (GST_VIDEO_CAPS_YUV_STRIDED ("NV12", "[0, max]"))
     );
 
 GST_BOILERPLATE (GstVP8Dec, gst_vp8_dec, GstBaseVideoDecoder,
@@ -309,10 +309,103 @@ gst_vp8_dec_send_tags (GstVP8Dec * dec)
       GST_BASE_VIDEO_CODEC_SRC_PAD (dec), list);
 }
 
+#define WEAK __attribute__((weak))
+
+void stride_copy_zip2 (guchar * new_buf, guchar * orig_buf1,
+    guchar * orig_buf2, gint sz);
+WEAK void
+stride_copy_zip2 (guchar * new_buf, guchar * orig_buf1, guchar * orig_buf2,
+    gint sz)
+{
+  while (sz--) {
+    *new_buf++ = *orig_buf1++;
+    *new_buf++ = *orig_buf2++;
+  }
+}
+
+void stride_copy (guchar * new_buf, guchar * orig_buf, gint sz);
+WEAK void
+stride_copy (guchar * new_buf, guchar * orig_buf, gint sz)
+{
+  memcpy (new_buf, orig_buf, sz);
+}
+
+/**
+ * move to strided buffer, interleaving two planes of identical dimensions
+ */
+static void
+stridemove_zip2 (guchar * new_buf, guchar * orig_buf1, guchar * orig_buf2,
+    gint new_stride, gint orig_stride, gint width, gint height)
+{
+  int row;
+
+  /* if increasing the stride, work from bottom-up to avoid overwriting data
+   * that has not been moved yet.. otherwise, work in the opposite order,
+   * for the same reason.
+   */
+  if (new_stride > orig_stride) {
+    for (row = height - 1; row >= 0; row--) {
+      stride_copy_zip2 (new_buf + (new_stride * row),
+          orig_buf1 + (orig_stride * row),
+          orig_buf2 + (orig_stride * row), width);
+    }
+  } else {
+    for (row = 0; row < height; row++) {
+      stride_copy_zip2 (new_buf + (new_stride * row),
+          orig_buf1 + (orig_stride * row),
+          orig_buf2 + (orig_stride * row), width);
+    }
+  }
+}
+
+/**
+ * Convert from one stride to another... like memmove, but can convert stride in
+ * the process.  This function is not aware of pixels, only of bytes.  So widths
+ * are given in bytes, not pixels.  The new_buf and orig_buf can point to the
+ * same buffers to do an in-place conversion, but the buffer should be large
+ * enough.
+ */
+static void
+stridemove (guchar * new_buf, guchar * orig_buf,
+    gint new_stride, gint orig_stride, gint width, gint height)
+{
+  int row;
+
+  /* if increasing the stride, work from bottom-up to avoid overwriting data
+   * that has not been moved yet.. otherwise, work in the opposite order,
+   * for the same reason.
+   */
+  if (new_stride > orig_stride) {
+    for (row = height - 1; row >= 0; row--) {
+      stride_copy (new_buf + (new_stride * row), orig_buf + (orig_stride * row),
+          width);
+    }
+  } else {
+    for (row = 0; row < height; row++) {
+      stride_copy (new_buf + (new_stride * row), orig_buf + (orig_stride * row),
+          width);
+    }
+  }
+}
+
 static void
 gst_vp8_dec_image_to_buffer (GstVP8Dec * dec, const vpx_image_t * img,
     GstBuffer * buffer)
 {
+  GstBaseVideoDecoder *decoder = (GstBaseVideoDecoder *) dec;
+#if 1
+  int stride, w, h;
+  guint8 *d;
+
+  stride = decoder->state.rowstride;
+  h = decoder->state.height;
+  w = decoder->state.width;
+
+  d = GST_BUFFER_DATA (buffer);
+  stridemove (d, img->planes[PLANE_Y], stride, img->stride[PLANE_Y], w, h);
+  stridemove_zip2 (d + (h * stride), img->planes[PLANE_U],
+      img->planes[PLANE_V], stride, img->stride[PLANE_U], w / 2, h / 2);
+#else
   int stride, w, h, i;
   guint8 *d;
   GstVideoState *state = &GST_BASE_VIDEO_CODEC (dec)->state;
@@ -349,6 +442,7 @@ gst_vp8_dec_image_to_buffer (GstVP8Dec * dec, const vpx_image_t * img,
   for (i = 0; i < h; i++)
     memcpy (d + i * stride,
         img->planes[VPX_PLANE_V] + i * img->stride[VPX_PLANE_V], w);
+#endif
 }
 
 static GstFlowReturn
@@ -388,7 +482,8 @@ gst_vp8_dec_handle_frame (GstBaseVideoDecoder * decoder, GstVideoFrame * frame)
     /* should set size here */
     state->width = stream_info.w;
     state->height = stream_info.h;
-    state->format = GST_VIDEO_FORMAT_I420;
+    state->rowstride = 4096;
+    state->format = GST_VIDEO_FORMAT_NV12;
     gst_vp8_dec_send_tags (dec);
 
     caps = vpx_codec_get_caps (&vpx_codec_vp8_dx_algo);
@@ -410,6 +505,8 @@ gst_vp8_dec_handle_frame (GstBaseVideoDecoder * decoder, GstVideoFrame * frame)
               gst_vpx_error_name (status)));
       return GST_FLOW_ERROR;
     }
+
+    dec->decoder.config.dec->threads = 8;
 
     if ((caps & VPX_CODEC_CAP_POSTPROC) && dec->post_processing) {
       vp8_postproc_cfg_t pp_cfg = { 0, };

@@ -2,6 +2,7 @@ plugin_LTLIBRARIES = \
 	libgstvp8.la
 
 libgstvp8_la_SOURCES = \
+	armv7.s \
 	gstvp8dec.c \
 	gstvp8enc.c \
 	gstvp8utils.c \

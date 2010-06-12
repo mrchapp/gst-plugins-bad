@@ -37,8 +37,8 @@ plugin_init (GstPlugin * plugin)
 #endif
 
 #ifdef HAVE_VP8_ENCODER
-  gst_element_register (plugin, "vp8enc", GST_RANK_PRIMARY,
-      gst_vp8_enc_get_type ());
+//  gst_element_register (plugin, "vp8enc", GST_RANK_PRIMARY,
+//      gst_vp8_enc_get_type ());
 #endif
 
   return TRUE;
