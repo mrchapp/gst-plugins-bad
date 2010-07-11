@@ -175,12 +175,10 @@ gst_camerabin_video_init (GstCameraBinVideo * vid,
 
   vid->aud_src = NULL;
   vid->sink = NULL;
-  vid->tee = NULL;
   vid->volume = NULL;
   vid->video_queue = NULL;
 
-  vid->tee_video_srcpad = NULL;
-  vid->tee_vf_srcpad = NULL;
+  vid->queue_video_srcpad = NULL;
 
   vid->pending_eos = NULL;
 
@@ -188,16 +186,12 @@ gst_camerabin_video_init (GstCameraBinVideo * vid,
   vid->flags = DEFAULT_FLAGS;
 
   vid->aud_src_probe_id = 0;
-  vid->vid_src_probe_id = 0;
-  vid->vid_tee_probe_id = 0;
+  vid->vid_queue_probe_id = 0;
   vid->vid_sink_probe_id = 0;
 
-  /* Create src and sink ghost pads */
+  /* Create sink ghost pad */
   vid->sinkpad = gst_ghost_pad_new_no_target ("sink", GST_PAD_SINK);
   gst_element_add_pad (GST_ELEMENT (vid), vid->sinkpad);
-
-  vid->srcpad = gst_ghost_pad_new_no_target ("src", GST_PAD_SRC);
-  gst_element_add_pad (GST_ELEMENT (vid), vid->srcpad);
 
   /* Add probe for handling eos when stopping recording */
   vid->vid_sink_probe_id = gst_pad_add_event_probe (vid->sinkpad,
@@ -351,7 +345,7 @@ gst_camerabin_video_change_state (GstElement * element,
       if (vid->pending_eos) {
         /* Video bin is still paused, so push eos directly to video queue */
         GST_DEBUG_OBJECT (vid, "pushing pending eos");
-        gst_pad_push_event (vid->tee_video_srcpad, vid->pending_eos);
+        gst_pad_push_event (vid->queue_video_srcpad, vid->pending_eos);
         vid->pending_eos = NULL;
       }
       break;
@@ -536,7 +530,7 @@ camerabin_video_sink_have_event (GstPad * pad, GstEvent * event,
 static gboolean
 gst_camerabin_video_create_elements (GstCameraBinVideo * vid)
 {
-  GstPad *pad = NULL, *vid_sinkpad = NULL, *vid_srcpad = NULL;
+  GstPad *pad = NULL, *vid_sinkpad = NULL;
   GstBin *vidbin = GST_BIN (vid);
   GstElement *queue = NULL;
 
@@ -556,28 +550,24 @@ gst_camerabin_video_create_elements (GstCameraBinVideo * vid)
     vid_sinkpad = gst_element_get_static_pad (vid->app_post, "sink");
   }
 
-  /* Add tee element */
-  if (!(vid->tee = gst_camerabin_create_and_add_element (vidbin, "tee"))) {
-    goto error;
-  }
-
-  /* Set up sink ghost pad for video bin */
-  if (!vid_sinkpad) {
-    vid_sinkpad = gst_element_get_static_pad (vid->tee, "sink");
-  }
-  gst_ghost_pad_set_target (GST_GHOST_PAD (vid->sinkpad), vid_sinkpad);
-  gst_object_unref (vid_sinkpad);
-
   /* Add queue element for video */
-  vid->tee_video_srcpad = gst_element_get_request_pad (vid->tee, "src%d");
-
   vid->video_queue = gst_element_factory_make ("queue", "video-queue");
   if (!gst_camerabin_add_element (vidbin, vid->video_queue)) {
     goto error;
   }
 
+  /* Set up sink ghost pad for video bin */
+  if (!vid_sinkpad) {
+    vid_sinkpad = gst_element_get_static_pad (vid->video_queue, "sink");
+  }
+  gst_ghost_pad_set_target (GST_GHOST_PAD (vid->sinkpad), vid_sinkpad);
+  gst_object_unref (vid_sinkpad);
+
+  vid->queue_video_srcpad =
+      gst_element_get_static_pad (vid->video_queue, "src");
+
   /* Add probe for rewriting video timestamps */
-  vid->vid_tee_probe_id = gst_pad_add_buffer_probe (vid->tee_video_srcpad,
+  vid->vid_queue_probe_id = gst_pad_add_buffer_probe (vid->queue_video_srcpad,
       G_CALLBACK (camerabin_video_pad_tee_src0_have_buffer), vid);
 
   /* Add user set or default video encoder element */
@@ -630,15 +620,15 @@ gst_camerabin_video_create_elements (GstCameraBinVideo * vid)
     /* Add optional audio conversion and volume elements and
        raise no errors if adding them fails */
     if (vid->flags & GST_CAMERABIN_FLAG_AUDIO_CONVERSION) {
-      if (!gst_camerabin_try_add_element (vidbin,
-              gst_element_factory_make ("audioconvert", NULL))) {
+      if (!gst_camerabin_try_add_element (vidbin, NULL,
+              gst_element_factory_make ("audioconvert", NULL), NULL)) {
         GST_WARNING_OBJECT (vid, "unable to add audio conversion element");
         /* gst_camerabin_try_add_element() destroyed the element */
       }
     }
 
     vid->volume = gst_element_factory_make ("volume", NULL);
-    if (!gst_camerabin_try_add_element (vidbin, vid->volume)) {
+    if (!gst_camerabin_try_add_element (vidbin, NULL, vid->volume, NULL)) {
       GST_WARNING_OBJECT (vid, "unable to add volume element");
       /* gst_camerabin_try_add_element() destroyed the element */
       vid->volume = NULL;
@@ -664,23 +654,6 @@ gst_camerabin_video_create_elements (GstCameraBinVideo * vid)
       goto error;
     }
   }
-  /* Add queue leading out of the video bin and to view finder */
-  vid->tee_vf_srcpad = gst_element_get_request_pad (vid->tee, "src%d");
-  queue = gst_element_factory_make ("queue", "viewfinder-queue");
-  if (!gst_camerabin_add_element (vidbin, queue)) {
-    goto error;
-  }
-  /* Set queue leaky, we don't want to block video encoder feed, but
-     prefer leaking view finder buffers instead. */
-  g_object_set (G_OBJECT (queue), "leaky", 2, "max-size-buffers", 1, NULL);
-
-  /* Set up src ghost pad for video bin */
-  vid_srcpad = gst_element_get_static_pad (queue, "src");
-  gst_ghost_pad_set_target (GST_GHOST_PAD (vid->srcpad), vid_srcpad);
-  /* Never let video bin eos events reach view finder */
-  vid->vid_src_probe_id = gst_pad_add_event_probe (vid_srcpad,
-      G_CALLBACK (gst_camerabin_drop_eos_probe), vid);
-  gst_object_unref (vid_srcpad);
 
   if (!(vid->flags & GST_CAMERABIN_FLAG_DISABLE_AUDIO)) {
     pad = gst_element_get_static_pad (vid->aud_src, "src");
@@ -723,42 +696,22 @@ gst_camerabin_video_destroy_elements (GstCameraBinVideo * vid)
     vid->aud_src_probe_id = 0;
   }
 
-  /* Remove EOS event probe from videobin srcpad (queue's srcpad) */
-  if (vid->vid_src_probe_id) {
-    GstPad *pad = gst_ghost_pad_get_target (GST_GHOST_PAD (vid->srcpad));
-    if (pad) {
-      gst_pad_remove_event_probe (pad, vid->vid_src_probe_id);
-      gst_object_unref (pad);
-    }
-    vid->vid_src_probe_id = 0;
-  }
-
   /* Remove buffer probe from video tee srcpad */
-  if (vid->vid_tee_probe_id) {
-    gst_pad_remove_buffer_probe (vid->tee_video_srcpad, vid->vid_tee_probe_id);
-    vid->vid_tee_probe_id = 0;
+  if (vid->vid_queue_probe_id) {
+    gst_pad_remove_buffer_probe (vid->queue_video_srcpad,
+        vid->vid_queue_probe_id);
+    vid->vid_queue_probe_id = 0;
   }
 
-  /* Release tee request pads */
-  if (vid->tee_video_srcpad) {
-    gst_element_release_request_pad (vid->tee, vid->tee_video_srcpad);
-    gst_object_unref (vid->tee_video_srcpad);
-    vid->tee_video_srcpad = NULL;
-  }
-  if (vid->tee_vf_srcpad) {
-    gst_element_release_request_pad (vid->tee, vid->tee_vf_srcpad);
-    gst_object_unref (vid->tee_vf_srcpad);
-    vid->tee_vf_srcpad = NULL;
-  }
+  gst_object_unref (vid->queue_video_srcpad);
+  vid->queue_video_srcpad = NULL;
 
   gst_ghost_pad_set_target (GST_GHOST_PAD (vid->sinkpad), NULL);
-  gst_ghost_pad_set_target (GST_GHOST_PAD (vid->srcpad), NULL);
 
   gst_camerabin_remove_elements_from_bin (GST_BIN (vid));
 
   vid->aud_src = NULL;
   vid->sink = NULL;
-  vid->tee = NULL;
   vid->volume = NULL;
   vid->video_queue = NULL;
   vid->vid_enc = NULL;

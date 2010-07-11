@@ -57,3 +57,22 @@ gst_camerabin_flags_get_type (void)
   g_once (&once, (GThreadFunc) register_gst_camerabin_flags, &id);
   return id;
 }
+
+
+GType
+gst_camerabin_mode_get_type (void)
+{
+  static GType gtype = 0;
+
+  if (gtype == 0) {
+    static const GEnumValue values[] = {
+      {MODE_PREVIEW, "Preview mode (should be default?)", "mode-preview"},
+      {MODE_IMAGE, "Still image capture (default)", "mode-image"},
+      {MODE_VIDEO, "Video recording", "mode-video"},
+      {0, NULL, NULL}
+    };
+
+    gtype = g_enum_register_static ("GstCameraBinMode", values);
+  }
+  return gtype;
+}

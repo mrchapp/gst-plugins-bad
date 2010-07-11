@@ -25,6 +25,7 @@
 
 G_BEGIN_DECLS
 
+/* XXX find better place for property related enum/defaults */
 enum
 {
   ARG_0,
@@ -69,6 +70,15 @@ enum
   ARG_VIDEO_CAPTURE_FRAMERATE
 };
 
+#define DEFAULT_WIDTH 640
+#define DEFAULT_HEIGHT 480
+#define DEFAULT_CAPTURE_WIDTH 800
+#define DEFAULT_CAPTURE_HEIGHT 600
+#define DEFAULT_FPS_N 0         /* makes it use the default */
+#define DEFAULT_FPS_D 1
+#define DEFAULT_ZOOM MIN_ZOOM
+
+
 /**
  * GstCameraBinFlags:
  * @GST_CAMERABIN_FLAG_SOURCE_RESIZE: enable video crop and scale
@@ -99,6 +109,31 @@ typedef enum {
 
 #define GST_TYPE_CAMERABIN_FLAGS (gst_camerabin_flags_get_type())
 GType gst_camerabin_flags_get_type (void);
+
+
+/**
+ * GstCameraBinMode:
+ * @MODE_PREVIEW: preview only (no capture) mode
+ * @MODE_IMAGE: image capture
+ * @MODE_VIDEO: video capture
+ *
+ * Capture mode to use.
+ */
+typedef enum
+{
+  /* note:  changed to align with 'capture-mode' property (even though
+   * I have no idea where this property comes from..)  But it somehow
+   * seems more logical for preview to be mode==0 even if it is an ABI
+   * break..
+   */
+  MODE_PREVIEW = 0,
+  MODE_IMAGE = 1,
+  MODE_VIDEO = 2,
+} GstCameraBinMode;
+
+
+#define GST_TYPE_CAMERABIN_MODE (gst_camerabin_mode_get_type ())
+GType gst_camerabin_mode_get_type (void);
 
 G_END_DECLS
 

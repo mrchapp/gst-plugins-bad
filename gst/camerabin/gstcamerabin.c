@@ -157,6 +157,8 @@
 #include <stdlib.h>
 
 #include <gst/gst.h>
+#include <gst/camerasrc/gstbasecamerasrc.h>
+#include "gstv4l2camerasrc.h"
 /* FIXME: include #include <gst/gst-i18n-plugin.h> and use _(" ") */
 
 #include "gstcamerabin.h"
@@ -193,36 +195,13 @@ enum
 
 static guint camerabin_signals[LAST_SIGNAL];
 
-#define GST_TYPE_CAMERABIN_MODE (gst_camerabin_mode_get_type ())
-
 /* default and range values for args */
 
-#define DEFAULT_MODE MODE_IMAGE
-#define DEFAULT_ZOOM 100
-#define DEFAULT_WIDTH 640
-#define DEFAULT_HEIGHT 480
-#define DEFAULT_CAPTURE_WIDTH 800
-#define DEFAULT_CAPTURE_HEIGHT 600
-#define DEFAULT_FPS_N 0         /* makes it use the default */
-#define DEFAULT_FPS_D 1
-
-#define CAMERABIN_DEFAULT_VF_CAPS "video/x-raw-yuv,format=(fourcc)I420"
-#define CAMERABIN_MAX_VF_WIDTH 848
-#define CAMERABIN_MAX_VF_HEIGHT 848
+#define DEFAULT_MODE MODE_PREVIEW
 
 #define DEFAULT_FLAGS GST_CAMERABIN_FLAG_SOURCE_RESIZE | \
   GST_CAMERABIN_FLAG_VIEWFINDER_SCALE | \
   GST_CAMERABIN_FLAG_IMAGE_COLOR_CONVERSION
-
-/* Using "bilinear" as default zoom method */
-#define CAMERABIN_DEFAULT_ZOOM_METHOD 1
-
-#define MIN_ZOOM 100
-#define MAX_ZOOM 1000
-#define ZOOM_1X MIN_ZOOM
-
-/* FIXME: this is v4l2camsrc specific */
-#define DEFAULT_V4L2CAMSRC_DRIVER_NAME "omap3cam"
 
 #define DEFAULT_BLOCK_VIEWFINDER FALSE
 
@@ -235,8 +214,6 @@ static guint camerabin_signals[LAST_SIGNAL];
  */
 
 static void camerabin_setup_src_elements (GstCameraBin * camera);
-
-static gboolean camerabin_create_src_elements (GstCameraBin * camera);
 
 static void camerabin_setup_view_elements (GstCameraBin * camera);
 
@@ -256,14 +233,7 @@ gst_camerabin_set_flags (GstCameraBin * camera, GstCameraBinFlags flags);
 static void
 gst_camerabin_change_filename (GstCameraBin * camera, const gchar * name);
 
-static void gst_camerabin_setup_zoom (GstCameraBin * camera);
-
-static GstCaps *gst_camerabin_get_allowed_input_caps (GstCameraBin * camera);
-
 static void gst_camerabin_rewrite_tags (GstCameraBin * camera);
-
-static void
-gst_camerabin_set_capsfilter_caps (GstCameraBin * camera, GstCaps * new_caps);
 
 static void gst_camerabin_start_image_capture (GstCameraBin * camera);
 
@@ -289,29 +259,10 @@ static void gst_camerabin_reset_to_view_finder (GstCameraBin * camera);
 
 static void gst_camerabin_do_stop (GstCameraBin * camera);
 
-static void
-gst_camerabin_set_allowed_framerate (GstCameraBin * camera,
-    GstCaps * filter_caps);
-
-static guint32 get_srcpad_current_format (GstElement * element);
-
-static const GValue *gst_camerabin_find_better_framerate (GstCameraBin * camera,
-    GstStructure * st, const GValue * orig_framerate);
-
-static void
-gst_camerabin_update_aspect_filter (GstCameraBin * camera, GstCaps * new_caps);
-
-static void gst_camerabin_finish_image_capture (GstCameraBin * camera);
-static void gst_camerabin_adapt_image_capture (GstCameraBin * camera,
-    GstCaps * new_caps);
 static void gst_camerabin_proxy_notify_cb (GObject * video_source,
     GParamSpec * pspec, gpointer user_data);
 static void gst_camerabin_monitor_video_source_properties (GstCameraBin *
     camera);
-static void gst_camerabin_configure_format (GstCameraBin * camera,
-    GstCaps * caps);
-static gboolean
-copy_missing_fields (GQuark field_id, const GValue * value, gpointer user_data);
 
 /*
  * GObject callback functions declaration
@@ -356,10 +307,6 @@ static void gst_camerabin_capture_stop (GstCameraBin * camera);
 static void gst_camerabin_capture_pause (GstCameraBin * camera);
 
 static void
-gst_camerabin_set_image_capture_caps (GstCameraBin * camera, gint width,
-    gint height);
-
-static void
 gst_camerabin_set_video_resolution_fps (GstCameraBin * camera, gint width,
     gint height, gint fps_n, gint fps_d);
 
@@ -372,33 +319,15 @@ gst_camerabin_set_image_resolution (GstCameraBin * camera, gint width,
  * GST BOILERPLATE and GObject types
  */
 
-static GType
-gst_camerabin_mode_get_type (void)
-{
-  static GType gtype = 0;
-
-  if (gtype == 0) {
-    static const GEnumValue values[] = {
-      {MODE_IMAGE, "Still image capture (default)", "mode-image"},
-      {MODE_VIDEO, "Video recording", "mode-video"},
-      {0, NULL, NULL}
-    };
-
-    gtype = g_enum_register_static ("GstCameraBinMode", values);
-  }
-  return gtype;
-}
-
-
 static gboolean
 gst_camerabin_iface_supported (GstImplementsInterface * iface, GType iface_type)
 {
   GstCameraBin *camera = GST_CAMERABIN (iface);
 
   if (iface_type == GST_TYPE_COLOR_BALANCE) {
-    if (camera->src_vid_src) {
-      return GST_IS_COLOR_BALANCE (camera->src_vid_src);
-    }
+    return
+        gst_base_camera_src_get_color_balance (GST_BASE_CAMERA_SRC
+        (camera->srcbin)) != NULL;
   } else if (iface_type == GST_TYPE_TAG_SETTER) {
     /* Note: Tag setter elements aren't
        present when image and video bin in NULL */
@@ -485,145 +414,16 @@ GST_BOILERPLATE_FULL (GstCameraBin, gst_camerabin, GstPipeline,
 static void
 camerabin_setup_src_elements (GstCameraBin * camera)
 {
-  GstStructure *st;
-  GstCaps *new_caps;
-  gboolean detect_framerate = FALSE;
-
-  /* clear video update status */
-  camera->video_capture_caps_update = FALSE;
-
-  if (!camera->view_finder_caps) {
-    st = gst_structure_from_string (CAMERABIN_DEFAULT_VF_CAPS, NULL);
-  } else {
-    st = gst_structure_copy (gst_caps_get_structure (camera->view_finder_caps,
-            0));
-  }
+  GstBaseCameraSrc *srcbin = GST_BASE_CAMERA_SRC (camera->srcbin);
+  GstPhotography *photography;
 
   gst_camerabin_monitor_video_source_properties (camera);
 
   /* Update photography interface settings */
-  if (GST_IS_ELEMENT (camera->src_vid_src) &&
-      gst_element_implements_interface (camera->src_vid_src,
-          GST_TYPE_PHOTOGRAPHY)) {
-    gst_photography_set_config (GST_PHOTOGRAPHY (camera->src_vid_src),
-        &camera->photo_settings);
+  photography = gst_base_camera_src_get_photography (srcbin);
+  if (photography) {
+    gst_photography_set_config (photography, &camera->photo_settings);
   }
-
-  if (camera->width > 0 && camera->height > 0) {
-    gst_structure_set (st,
-        "width", G_TYPE_INT, camera->width,
-        "height", G_TYPE_INT, camera->height, NULL);
-  }
-
-  if (camera->fps_n > 0 && camera->fps_d > 0) {
-    if (camera->night_mode) {
-      GST_INFO_OBJECT (camera, "night mode, lowest allowed fps will be forced");
-      camera->pre_night_fps_n = camera->fps_n;
-      camera->pre_night_fps_d = camera->fps_d;
-      detect_framerate = TRUE;
-    } else {
-      gst_structure_set (st,
-          "framerate", GST_TYPE_FRACTION, camera->fps_n, camera->fps_d, NULL);
-      new_caps = gst_caps_new_full (st, NULL);
-    }
-  } else {
-    GST_DEBUG_OBJECT (camera, "no framerate specified");
-    detect_framerate = TRUE;
-  }
-
-  if (detect_framerate) {
-    GST_DEBUG_OBJECT (camera, "detecting allowed framerate");
-    /* Remove old framerate if any */
-    if (gst_structure_has_field (st, "framerate")) {
-      gst_structure_remove_field (st, "framerate");
-    }
-    new_caps = gst_caps_new_full (st, NULL);
-
-    /* Set allowed framerate for the resolution */
-    gst_camerabin_set_allowed_framerate (camera, new_caps);
-  }
-
-  /* Set default zoom method */
-  if (camera->src_zoom_scale) {
-    g_object_set (camera->src_zoom_scale, "method",
-        CAMERABIN_DEFAULT_ZOOM_METHOD, NULL);
-  }
-  /* we create new caps in any way and they take ownership of the structure st */
-  gst_caps_replace (&camera->view_finder_caps, new_caps);
-  gst_caps_unref (new_caps);
-
-  /* Set caps for view finder mode */
-  /* This also sets zoom */
-  gst_camerabin_set_capsfilter_caps (camera, camera->view_finder_caps);
-}
-
-/*
- * camerabin_create_src_elements:
- * @camera: camerabin object
- *
- * This function creates and links upstream side elements for camerabin.
- * videosrc ! cspconv ! capsfilter ! crop ! scale ! capsfilter ! out-sel !
- *
- * Returns: TRUE, if elements were successfully created, FALSE otherwise
- */
-static gboolean
-camerabin_create_src_elements (GstCameraBin * camera)
-{
-  gboolean ret = FALSE;
-  GstBin *cbin = GST_BIN (camera);
-  gchar *driver_name = NULL;
-
-  /* Add application set or default video src element */
-  if (!(camera->src_vid_src = gst_camerabin_setup_default_element (cbin,
-              camera->app_vid_src, "autovideosrc", DEFAULT_VIDEOSRC))) {
-    camera->src_vid_src = NULL;
-    goto done;
-  } else {
-    if (!gst_camerabin_add_element (cbin, camera->src_vid_src))
-      goto done;
-  }
-  if (camera->flags & GST_CAMERABIN_FLAG_SOURCE_COLOR_CONVERSION) {
-    if (!gst_camerabin_create_and_add_element (cbin, "ffmpegcolorspace"))
-      goto done;
-  }
-  if (!(camera->src_filter =
-          gst_camerabin_create_and_add_element (cbin, "capsfilter")))
-    goto done;
-  if (camera->flags & GST_CAMERABIN_FLAG_SOURCE_RESIZE) {
-    if (!(camera->src_zoom_crop =
-            gst_camerabin_create_and_add_element (cbin, "videocrop")))
-      goto done;
-    if (!(camera->src_zoom_scale =
-            gst_camerabin_create_and_add_element (cbin, "videoscale")))
-      goto done;
-    if (!(camera->src_zoom_filter =
-            gst_camerabin_create_and_add_element (cbin, "capsfilter")))
-      goto done;
-  }
-  if (camera->app_video_filter) {
-    if (!gst_camerabin_add_element (cbin, camera->app_video_filter)) {
-      goto done;
-    }
-  }
-  if (!(camera->src_out_sel =
-          gst_camerabin_create_and_add_element (cbin, "output-selector")))
-    goto done;
-
-  /* Set default "driver-name" for v4l2camsrc if not set */
-  /* FIXME: v4l2camsrc specific */
-  if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
-          "driver-name")) {
-    g_object_get (G_OBJECT (camera->src_vid_src), "driver-name",
-        &driver_name, NULL);
-    if (!driver_name) {
-      g_object_set (G_OBJECT (camera->src_vid_src), "driver-name",
-          DEFAULT_V4L2CAMSRC_DRIVER_NAME, NULL);
-    }
-  }
-
-  ret = TRUE;
-done:
-  return ret;
 }
 
 /*
@@ -636,7 +436,6 @@ static void
 camerabin_setup_view_elements (GstCameraBin * camera)
 {
   GST_DEBUG_OBJECT (camera, "setting view finder properties");
-  g_object_set (G_OBJECT (camera->view_in_sel), "select-all", TRUE, NULL);
   /* Set properties for view finder sink */
   /* Find the actual sink if using bin like autovideosink */
   if (GST_IS_BIN (camera->view_sink)) {
@@ -666,21 +465,19 @@ camerabin_setup_view_elements (GstCameraBin * camera)
 static gboolean
 camerabin_create_view_elements (GstCameraBin * camera)
 {
-  const GList *pads;
   GstBin *cbin = GST_BIN (camera);
+  GstElement *queue = NULL;
 
-  if (!(camera->view_in_sel =
-          gst_camerabin_create_and_add_element (cbin, "input-selector"))) {
+  /* Add queue leading to view finder */
+  if (!(queue = gst_camerabin_create_and_add_element (cbin, "queue"))) {
     goto error;
   }
 
-  /* Look for recently added input selector sink pad, we need to release it later */
-  pads = GST_ELEMENT_PADS (camera->view_in_sel);
-  while (pads != NULL
-      && (GST_PAD_DIRECTION (GST_PAD (pads->data)) != GST_PAD_SINK)) {
-    pads = g_list_next (pads);
-  }
-  camera->pad_view_src = GST_PAD (pads->data);
+  /* Set queue leaky, we don't want to block video encoder feed, but
+   * prefer leaking view finder buffers instead, in case srcbin is pushing
+   * down both paths in same thread.
+   */
+  g_object_set (G_OBJECT (queue), "leaky", 2, "max-size-buffers", 1, NULL);
 
   /* Add videoscale in case we need to downscale frame for view finder */
   if (camera->flags & GST_CAMERABIN_FLAG_VIEWFINDER_SCALE) {
@@ -735,25 +532,26 @@ static gboolean
 camerabin_create_elements (GstCameraBin * camera)
 {
   gboolean ret = FALSE;
-  GstPadLinkReturn link_ret = GST_PAD_LINK_REFUSED;
-  GstPad *unconnected_pad;
 
   GST_LOG_OBJECT (camera, "creating elements");
 
-  /* Create "src" elements */
-  if (!camerabin_create_src_elements (camera)) {
+  /* Add camera src bin */
+  if (!gst_camerabin_add_element (GST_BIN (camera), camera->srcbin)) {
     goto done;
   }
 
-  camera->pad_src_img =
-      gst_element_get_request_pad (camera->src_out_sel, "src%d");
+  camera->pad_src_img = gst_element_get_static_pad (camera->srcbin, "imgsrc");
+
+  GST_DEBUG_OBJECT (camera, "pad_src_img: %" GST_PTR_FORMAT,
+      camera->pad_src_img);
 
   gst_pad_add_buffer_probe (camera->pad_src_img,
       G_CALLBACK (gst_camerabin_have_img_buffer), camera);
 
   /* Add queue leading to image bin */
   camera->img_queue = gst_element_factory_make ("queue", "image-queue");
-  if (!gst_camerabin_add_element (GST_BIN (camera), camera->img_queue)) {
+  if (!gst_camerabin_add_element_full (GST_BIN (camera), "imgsrc",
+          camera->img_queue, NULL)) {
     goto done;
   }
 
@@ -773,8 +571,16 @@ camerabin_create_elements (GstCameraBin * camera)
     goto done;
   }
 
-  camera->pad_src_view =
-      gst_element_get_request_pad (camera->src_out_sel, "src%d");
+  camera->pad_src_view = gst_element_get_static_pad (camera->srcbin, "vfsrc");
+
+  /* Add video bin */
+  camera->pad_src_vid = gst_element_get_static_pad (camera->srcbin, "vidsrc");
+  if (!gst_camerabin_add_element_full (GST_BIN (camera), "vidsrc",
+          camera->vidbin, NULL)) {
+    goto done;
+  }
+  gst_pad_add_buffer_probe (camera->pad_src_vid,
+      G_CALLBACK (gst_camerabin_have_vid_buffer), camera);
 
   /* Create view finder elements */
   if (!camerabin_create_view_elements (camera)) {
@@ -783,29 +589,8 @@ camerabin_create_elements (GstCameraBin * camera)
   }
 
   /* Set view finder active as default */
-  g_object_set (G_OBJECT (camera->src_out_sel), "active-pad",
-      camera->pad_src_view, NULL);
-
-  /* Add video bin */
-  camera->pad_src_vid =
-      gst_element_get_request_pad (camera->src_out_sel, "src%d");
-  if (!gst_camerabin_add_element (GST_BIN (camera), camera->vidbin)) {
-    goto done;
-  }
-  gst_pad_add_buffer_probe (camera->pad_src_vid,
-      G_CALLBACK (gst_camerabin_have_vid_buffer), camera);
-
-  /* Link video bin ! view finder */
-  unconnected_pad = gst_bin_find_unlinked_pad (GST_BIN (camera), GST_PAD_SRC);
-  camera->pad_view_vid =
-      gst_element_get_request_pad (camera->view_in_sel, "sink%d");
-  link_ret = gst_pad_link (unconnected_pad, camera->pad_view_vid);
-  gst_object_unref (unconnected_pad);
-  if (GST_PAD_LINK_FAILED (link_ret)) {
-    GST_ELEMENT_ERROR (camera, CORE, NEGOTIATION, (NULL),
-        ("linking video bin and view finder failed"));
-    goto done;
-  }
+  gst_base_camera_src_set_mode (GST_BASE_CAMERA_SRC (camera->srcbin),
+      MODE_PREVIEW);
 
   ret = TRUE;
 
@@ -829,28 +614,15 @@ camerabin_destroy_elements (GstCameraBin * camera)
   GST_DEBUG_OBJECT (camera, "destroying elements");
 
   /* Release request pads */
-  if (camera->pad_view_vid) {
-    gst_element_release_request_pad (camera->view_in_sel, camera->pad_view_vid);
-    gst_object_unref (camera->pad_view_vid);
-    camera->pad_view_vid = NULL;
-  }
   if (camera->pad_src_vid) {
-    gst_element_release_request_pad (camera->src_out_sel, camera->pad_src_vid);
     gst_object_unref (camera->pad_src_vid);
     camera->pad_src_vid = NULL;
   }
   if (camera->pad_src_img) {
-    gst_element_release_request_pad (camera->src_out_sel, camera->pad_src_img);
     gst_object_unref (camera->pad_src_img);
     camera->pad_src_img = NULL;
   }
-  if (camera->pad_view_src) {
-    gst_element_release_request_pad (camera->view_in_sel, camera->pad_view_src);
-    /* don't unref, we have not requested it */
-    camera->pad_view_src = NULL;
-  }
   if (camera->pad_src_view) {
-    gst_element_release_request_pad (camera->src_out_sel, camera->pad_src_view);
     gst_object_unref (camera->pad_src_view);
     camera->pad_src_view = NULL;
   }
@@ -861,18 +633,14 @@ camerabin_destroy_elements (GstCameraBin * camera)
   }
 
   /* view finder elements */
-  camera->view_in_sel = NULL;
   camera->view_scale = NULL;
   camera->aspect_filter = NULL;
   camera->view_sink = NULL;
 
   /* source elements */
-  camera->src_vid_src = NULL;
-  camera->src_filter = NULL;
-  camera->src_zoom_crop = NULL;
-  camera->src_zoom_scale = NULL;
-  camera->src_zoom_filter = NULL;
-  camera->src_out_sel = NULL;
+  /* XXX do I need to unref, or does gst_camerabin_remove_elements_from_bin
+   * do this for me? */
+  camera->srcbin = NULL;
 
   camera->active_bin = NULL;
 
@@ -908,25 +676,12 @@ camerabin_dispose_elements (GstCameraBin * camera)
     gst_object_unref (camera->app_vf_sink);
     camera->app_vf_sink = NULL;
   }
-  if (camera->app_vid_src) {
-    gst_object_unref (camera->app_vid_src);
-    camera->app_vid_src = NULL;
-  }
-
-  if (camera->app_video_filter) {
-    gst_object_unref (camera->app_video_filter);
-    camera->app_video_filter = NULL;
-  }
-
   if (camera->app_viewfinder_filter) {
     gst_object_unref (camera->app_viewfinder_filter);
     camera->app_viewfinder_filter = NULL;
   }
 
   /* Free caps */
-  gst_caps_replace (&camera->image_capture_caps, NULL);
-  gst_caps_replace (&camera->view_finder_caps, NULL);
-  gst_caps_replace (&camera->allowed_caps, NULL);
   gst_caps_replace (&camera->preview_caps, NULL);
   gst_caps_replace (&camera->video_preview_caps, NULL);
   gst_buffer_replace (&camera->video_preview_buffer, NULL);
@@ -984,6 +739,11 @@ gst_camerabin_change_mode (GstCameraBin * camera, gint mode)
         mode, camera->mode);
     /* Interrupt ongoing capture */
     gst_camerabin_do_stop (camera);
+    // XXX need to re-think this a bit.. originally camerabin
+    // had mode seperate from capturing state.. ie. either
+    // img or vid mode, but not capturing, is preview mode..
+    // but camsrcbin has img/vid/preview modes..  need to
+    // align concept of modes..
     camera->mode = mode;
     gst_element_get_state (GST_ELEMENT (camera), &state, NULL, 0);
     if (state == GST_STATE_PAUSED || state == GST_STATE_PLAYING) {
@@ -1051,172 +811,6 @@ gst_camerabin_change_filename (GstCameraBin * camera, const gchar * name)
         camera->filename->str, name);
     g_string_assign (camera->filename, name);
   }
-}
-
-static gboolean
-gst_camerabin_set_videosrc_zoom (GstCameraBin * camera, gint zoom)
-{
-  gboolean ret = FALSE;
-
-  if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
-          "zoom")) {
-    g_object_set (G_OBJECT (camera->src_vid_src), "zoom",
-        (gfloat) zoom / 100, NULL);
-    ret = TRUE;
-  }
-  return ret;
-}
-
-
-static gboolean
-gst_camerabin_set_element_zoom (GstCameraBin * camera, gint zoom)
-{
-  gint w2_crop = 0, h2_crop = 0;
-  GstPad *pad_zoom_sink = NULL;
-  gboolean ret = FALSE;
-  gint left = camera->base_crop_left;
-  gint right = camera->base_crop_right;
-  gint top = camera->base_crop_top;
-  gint bottom = camera->base_crop_bottom;
-
-  if (camera->src_zoom_crop) {
-    /* Update capsfilters to apply the zoom */
-    GST_INFO_OBJECT (camera, "zoom: %d, orig size: %dx%d", zoom,
-        camera->width, camera->height);
-
-    if (zoom != ZOOM_1X) {
-      w2_crop = (camera->width - (camera->width * ZOOM_1X / zoom)) / 2;
-      h2_crop = (camera->height - (camera->height * ZOOM_1X / zoom)) / 2;
-
-      left += w2_crop;
-      right += w2_crop;
-      top += h2_crop;
-      bottom += h2_crop;
-
-      /* force number of pixels cropped from left to be even, to avoid slow code
-       * path on videoscale */
-      left &= 0xFFFE;
-    }
-
-    pad_zoom_sink = gst_element_get_static_pad (camera->src_zoom_crop, "sink");
-
-    GST_INFO_OBJECT (camera,
-        "sw cropping: left:%d, right:%d, top:%d, bottom:%d", left, right, top,
-        bottom);
-
-    GST_PAD_STREAM_LOCK (pad_zoom_sink);
-    g_object_set (camera->src_zoom_crop, "left", left, "right", right, "top",
-        top, "bottom", bottom, NULL);
-    GST_PAD_STREAM_UNLOCK (pad_zoom_sink);
-    gst_object_unref (pad_zoom_sink);
-    ret = TRUE;
-  }
-  return ret;
-}
-
-/*
- * gst_camerabin_setup_zoom:
- * @camera: camerabin object
- *
- * Apply zoom configured to camerabin to capture.
- */
-static void
-gst_camerabin_setup_zoom (GstCameraBin * camera)
-{
-  gint zoom;
-
-  g_return_if_fail (camera != NULL);
-
-  zoom = g_atomic_int_get (&camera->zoom);
-
-  g_return_if_fail (zoom);
-
-  GST_INFO_OBJECT (camera, "setting zoom %d", zoom);
-
-  if (gst_camerabin_set_videosrc_zoom (camera, zoom)) {
-    gst_camerabin_set_element_zoom (camera, ZOOM_1X);
-    GST_INFO_OBJECT (camera, "zoom set using videosrc");
-  } else if (gst_camerabin_set_element_zoom (camera, zoom)) {
-    GST_INFO_OBJECT (camera, "zoom set using gst elements");
-  } else {
-    GST_INFO_OBJECT (camera, "setting zoom failed");
-  }
-}
-
-/*
- * gst_camerabin_get_allowed_input_caps:
- * @camera: camerabin object
- *
- * Retrieve caps from videosrc describing formats it supports
- *
- * Returns: caps object from videosrc
- */
-static GstCaps *
-gst_camerabin_get_allowed_input_caps (GstCameraBin * camera)
-{
-  GstCaps *caps = NULL;
-  GstPad *pad = NULL, *peer_pad = NULL;
-  GstState state;
-  GstElement *videosrc;
-
-  g_return_val_if_fail (camera != NULL, NULL);
-
-  videosrc = camera->src_vid_src ? camera->src_vid_src : camera->app_vid_src;
-
-  if (!videosrc) {
-    GST_WARNING_OBJECT (camera, "no videosrc, can't get allowed caps");
-    goto failed;
-  }
-
-  if (camera->allowed_caps) {
-    GST_DEBUG_OBJECT (camera, "returning cached caps");
-    goto done;
-  }
-
-  pad = gst_element_get_static_pad (videosrc, "src");
-
-  if (!pad) {
-    GST_WARNING_OBJECT (camera, "no srcpad in videosrc");
-    goto failed;
-  }
-
-  state = GST_STATE (videosrc);
-
-  /* Make this function work also in NULL state */
-  if (state == GST_STATE_NULL) {
-    GST_DEBUG_OBJECT (camera, "setting videosrc to ready temporarily");
-    peer_pad = gst_pad_get_peer (pad);
-    if (peer_pad) {
-      gst_pad_unlink (pad, peer_pad);
-    }
-    /* Set videosrc to READY to open video device */
-    gst_element_set_locked_state (videosrc, TRUE);
-    gst_element_set_state (videosrc, GST_STATE_READY);
-  }
-
-  camera->allowed_caps = gst_pad_get_caps (pad);
-
-  /* Restore state and re-link if necessary */
-  if (state == GST_STATE_NULL) {
-    GST_DEBUG_OBJECT (camera, "restoring videosrc state %d", state);
-    /* Reset videosrc to NULL state, some drivers seem to need this */
-    gst_element_set_state (videosrc, GST_STATE_NULL);
-    if (peer_pad) {
-      gst_pad_link (pad, peer_pad);
-      gst_object_unref (peer_pad);
-    }
-    gst_element_set_locked_state (videosrc, FALSE);
-  }
-
-  gst_object_unref (pad);
-
-done:
-  if (camera->allowed_caps) {
-    caps = gst_caps_copy (camera->allowed_caps);
-  }
-  GST_DEBUG_OBJECT (camera, "allowed caps:%" GST_PTR_FORMAT, caps);
-failed:
-  return caps;
 }
 
 /*
@@ -1328,17 +922,21 @@ gst_camerabin_get_internal_tags (GstCameraBin * camera)
   const GList *controls = NULL, *item;
   GstColorBalanceChannel *channel;
   gint min_value, max_value, mid_value, cur_value;
+  gint width, height, zoom;
 
   if (camera->active_bin == camera->vidbin) {
     /* FIXME: check if internal video tag setting is needed */
     goto done;
   }
 
-  gst_tag_list_add (list, GST_TAG_MERGE_REPLACE,
-      "image-width", camera->width, "image-height", camera->height, NULL);
+  g_object_get (camera->srcbin, "width", &width, "height", &height,
+      "zoom", &zoom, NULL);
 
   gst_tag_list_add (list, GST_TAG_MERGE_REPLACE,
-      "capture-digital-zoom", camera->zoom, 100, NULL);
+      "image-width", width, "image-height", height, NULL);
+
+  gst_tag_list_add (list, GST_TAG_MERGE_REPLACE,
+      "capture-digital-zoom", zoom, 100, NULL);
 
   if (gst_element_implements_interface (GST_ELEMENT (camera),
           GST_TYPE_COLOR_BALANCE)) {
@@ -1432,56 +1030,6 @@ gst_camerabin_rewrite_tags (GstCameraBin * camera)
 }
 
 /*
- * gst_camerabin_set_capsfilter_caps:
- * @camera: camerabin object
- * @new_caps: pointer to caps object to set
- *
- * Set given caps to camerabin capsfilters.
- */
-static void
-gst_camerabin_set_capsfilter_caps (GstCameraBin * camera, GstCaps * new_caps)
-{
-  GST_INFO_OBJECT (camera, "new_caps:%" GST_PTR_FORMAT, new_caps);
-
-  gst_camerabin_configure_format (camera, new_caps);
-
-  /* Update zoom */
-  gst_camerabin_setup_zoom (camera);
-
-  /* Update capsfilters */
-  g_object_set (G_OBJECT (camera->src_filter), "caps", new_caps, NULL);
-  if (camera->src_zoom_filter)
-    g_object_set (G_OBJECT (camera->src_zoom_filter), "caps", new_caps, NULL);
-  gst_camerabin_update_aspect_filter (camera, new_caps);
-  GST_INFO_OBJECT (camera, "udpated");
-}
-
-/*
- * img_capture_prepared:
- * @data: camerabin object
- * @caps: caps describing the prepared image format
- *
- * Callback which is called after image capture has been prepared.
- */
-static void
-img_capture_prepared (gpointer data, GstCaps * caps)
-{
-  GstCameraBin *camera = GST_CAMERABIN (data);
-
-  GST_INFO_OBJECT (camera, "image capture prepared");
-
-  /* It is possible we are about to get something else that we requested */
-  if (!gst_caps_is_equal (camera->image_capture_caps, caps)) {
-    gst_camerabin_adapt_image_capture (camera, caps);
-  } else {
-    gst_camerabin_set_capsfilter_caps (camera, camera->image_capture_caps);
-  }
-
-  g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", FALSE,
-      "active-pad", camera->pad_src_img, NULL);
-}
-
-/*
  * gst_camerabin_start_image_capture:
  * @camera: camerabin object
  *
@@ -1490,54 +1038,19 @@ img_capture_prepared (gpointer data, GstCaps * caps)
 static void
 gst_camerabin_start_image_capture (GstCameraBin * camera)
 {
-  gboolean wait_for_prepare = FALSE, ret = FALSE;
+  gboolean ret = FALSE;
 
   GST_INFO_OBJECT (camera, "starting image capture");
 
-  if (GST_IS_ELEMENT (camera->src_vid_src) &&
-      gst_element_implements_interface (camera->src_vid_src,
-          GST_TYPE_PHOTOGRAPHY)) {
-    /* Start image capture preparations using photography iface */
-    wait_for_prepare = TRUE;
-    g_mutex_lock (camera->capture_mutex);
+  g_mutex_lock (camera->capture_mutex);
 
-    /* Enable still image capture mode in v4l2camsrc */
-    if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
-            "capture-mode")) {
-      g_object_set (G_OBJECT (camera->src_vid_src), "capture-mode", 1, NULL);
-    }
+  /* Enable still image capture mode in v4l2camsrc */
+  ret = gst_base_camera_src_set_mode (GST_BASE_CAMERA_SRC (camera->srcbin),
+      MODE_IMAGE);
 
-    if (!camera->image_capture_caps || camera->image_capture_caps_update) {
-      if (camera->image_capture_width && camera->image_capture_height) {
-        /* Resolution is set, but it isn't in use yet */
-        gst_camerabin_set_image_capture_caps (camera,
-            camera->image_capture_width, camera->image_capture_height);
-      } else {
-        /* Capture resolution not set. Use viewfinder resolution */
-        camera->image_capture_caps = gst_caps_copy (camera->view_finder_caps);
-        camera->image_capture_caps_update = FALSE;
-      }
-    }
+  camera->capturing = TRUE;
 
-    /* Start preparations for image capture */
-    GST_DEBUG_OBJECT (camera, "prepare image capture caps %" GST_PTR_FORMAT,
-        camera->image_capture_caps);
-    ret =
-        gst_photography_prepare_for_capture (GST_PHOTOGRAPHY
-        (camera->src_vid_src), (GstPhotoCapturePrepared) img_capture_prepared,
-        camera->image_capture_caps, camera);
-    camera->capturing = TRUE;
-    g_mutex_unlock (camera->capture_mutex);
-  }
-
-  if (!wait_for_prepare) {
-    g_mutex_lock (camera->capture_mutex);
-    g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", TRUE,
-        "active-pad", camera->pad_src_img, NULL);
-    camera->capturing = TRUE;
-    ret = TRUE;
-    g_mutex_unlock (camera->capture_mutex);
-  }
+  g_mutex_unlock (camera->capture_mutex);
 
   if (!ret) {
     GST_WARNING_OBJECT (camera, "starting image capture failed");
@@ -1551,10 +1064,9 @@ static void
 reset_video_capture_caps (GstCameraBin * camera)
 {
   GstState state, pending;
-  GstPad *activepad = NULL;
 
-  GST_INFO_OBJECT (camera, "switching resolution to %dx%d and fps to %d/%d",
-      camera->width, camera->height, camera->fps_n, camera->fps_d);
+//XXX  GST_INFO_OBJECT (camera, "switching resolution to %dx%d and fps to %d/%d",
+//XXX      camera->width, camera->height, camera->fps_n, camera->fps_d);
 
   /* Interrupt ongoing capture */
   gst_camerabin_do_stop (camera);
@@ -1563,23 +1075,12 @@ reset_video_capture_caps (GstCameraBin * camera)
   if (state == GST_STATE_PAUSED || state == GST_STATE_PLAYING) {
     GST_INFO_OBJECT (camera,
         "changing to READY to initialize videosrc with new format");
-    g_object_get (G_OBJECT (camera->src_out_sel), "active-pad", &activepad,
-        NULL);
     gst_element_set_state (GST_ELEMENT (camera), GST_STATE_READY);
   }
   if (pending != GST_STATE_VOID_PENDING) {
     GST_LOG_OBJECT (camera, "restoring pending state: %s",
         gst_element_state_get_name (pending));
     state = pending;
-  }
-
-  /* Re-set the active pad since switching camerabin to READY state clears this
-   * setting in output-selector */
-  if (activepad) {
-    GST_INFO_OBJECT (camera, "re-setting active pad in output-selector");
-
-    g_object_set (G_OBJECT (camera->src_out_sel), "active-pad", activepad,
-        NULL);
   }
 
   gst_element_set_state (GST_ELEMENT (camera), state);
@@ -1617,14 +1118,8 @@ gst_camerabin_start_video_recording (GstCameraBin * camera)
     gst_element_set_locked_state (camera->vidbin, FALSE);
     /* ensure elements activated before feeding data into it */
     state_ret = gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PAUSED);
-    g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", FALSE,
-        "active-pad", camera->pad_src_vid, NULL);
-
-    /* Enable video mode in v4l2camsrc */
-    if (g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
-            "capture-mode")) {
-      g_object_set (G_OBJECT (camera->src_vid_src), "capture-mode", 2, NULL);
-    }
+    gst_base_camera_src_set_mode (GST_BASE_CAMERA_SRC (camera->srcbin),
+        MODE_VIDEO);
     gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PLAYING);
     gst_element_set_locked_state (camera->vidbin, TRUE);
   } else {
@@ -1773,7 +1268,7 @@ gst_camerabin_have_img_buffer (GstPad * pad, GstBuffer * buffer,
 
   /* Add buffer probe to outputselector's sink pad. It sends
      EOS event to image queue. */
-  os_sink = gst_element_get_static_pad (camera->src_out_sel, "sink");
+  os_sink = gst_element_get_static_pad (camera->srcbin, "imgsrc");      // XXX ok to have on srcpad instead of sinkpad??
   camera->image_captured_id = gst_pad_add_buffer_probe (os_sink,
       G_CALLBACK (gst_camerabin_have_src_buffer), camera);
   gst_object_unref (os_sink);
@@ -1782,7 +1277,8 @@ done:
 
   /* HACK: v4l2camsrc changes to view finder resolution automatically
      after one captured still image */
-  gst_camerabin_finish_image_capture (camera);
+  gst_base_camera_src_finish_image_capture (GST_BASE_CAMERA_SRC
+      (camera->srcbin));
 
   GST_DEBUG_OBJECT (camera, "image captured, switching to viewfinder");
 
@@ -1960,12 +1456,6 @@ gst_camerabin_reset_to_view_finder (GstCameraBin * camera)
   GstStateChangeReturn state_ret;
   GST_DEBUG_OBJECT (camera, "resetting");
 
-  if (camera->src_out_sel) {
-    /* Set selector to forward data to view finder */
-    g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", FALSE,
-        "active-pad", camera->pad_src_view, NULL);
-  }
-
   /* Set video bin to READY state */
   if (camera->active_bin == camera->vidbin) {
     state_ret = gst_element_set_state (camera->active_bin, GST_STATE_READY);
@@ -1982,11 +1472,8 @@ gst_camerabin_reset_to_view_finder (GstCameraBin * camera)
   camera->eos_handled = FALSE;
 
   /* Enable view finder mode in v4l2camsrc */
-  if (camera->src_vid_src &&
-      g_object_class_find_property (G_OBJECT_GET_CLASS (camera->src_vid_src),
-          "capture-mode")) {
-    g_object_set (G_OBJECT (camera->src_vid_src), "capture-mode", 0, NULL);
-  }
+  gst_base_camera_src_set_mode (GST_BASE_CAMERA_SRC (camera->srcbin),
+      MODE_PREVIEW);
 
   GST_DEBUG_OBJECT (camera, "reset done");
 }
@@ -2047,392 +1534,6 @@ gst_camerabin_default_signal_img_done (GstCameraBin * camera,
   return FALSE;
 }
 
-/*
- * gst_camerabin_set_allowed_framerate:
- * @camera: camerabin object
- * @filter_caps: update allowed framerate to these caps
- *
- * Find allowed frame rate from video source that matches with
- * resolution in @filter_caps. Set found frame rate to @filter_caps.
- */
-static void
-gst_camerabin_set_allowed_framerate (GstCameraBin * camera,
-    GstCaps * filter_caps)
-{
-  GstStructure *structure;
-  GstCaps *allowed_caps = NULL, *intersect = NULL, *tmp_caps = NULL;
-  const GValue *framerate = NULL;
-  guint caps_size, i;
-  guint32 format = 0;
-
-  GST_INFO_OBJECT (camera, "filter caps:%" GST_PTR_FORMAT, filter_caps);
-
-  structure = gst_structure_copy (gst_caps_get_structure (filter_caps, 0));
-
-  /* Set fourcc format according to current videosrc format */
-  format = get_srcpad_current_format (camera->src_vid_src);
-  if (format) {
-    GST_DEBUG_OBJECT (camera,
-        "using format %" GST_FOURCC_FORMAT " for matching",
-        GST_FOURCC_ARGS (format));
-    gst_structure_set (structure, "format", GST_TYPE_FOURCC, format, NULL);
-  } else {
-    GST_DEBUG_OBJECT (camera, "not matching against fourcc format");
-    gst_structure_remove_field (structure, "format");
-  }
-
-  tmp_caps = gst_caps_new_full (structure, NULL);
-
-  /* Get supported caps from video src that matches with new filter caps */
-  allowed_caps = gst_camerabin_get_allowed_input_caps (camera);
-  intersect = gst_caps_intersect (allowed_caps, tmp_caps);
-  GST_INFO_OBJECT (camera, "intersect caps:%" GST_PTR_FORMAT, intersect);
-
-  /* Find the best framerate from the caps */
-  caps_size = gst_caps_get_size (intersect);
-  for (i = 0; i < caps_size; i++) {
-    structure = gst_caps_get_structure (intersect, i);
-    framerate =
-        gst_camerabin_find_better_framerate (camera, structure, framerate);
-  }
-
-  /* Set found frame rate to original caps */
-  if (GST_VALUE_HOLDS_FRACTION (framerate)) {
-    gst_caps_set_simple (filter_caps,
-        "framerate", GST_TYPE_FRACTION,
-        gst_value_get_fraction_numerator (framerate),
-        gst_value_get_fraction_denominator (framerate), NULL);
-  }
-
-  /* Unref helper caps */
-  if (allowed_caps) {
-    gst_caps_unref (allowed_caps);
-  }
-  if (intersect) {
-    gst_caps_unref (intersect);
-  }
-  if (tmp_caps) {
-    gst_caps_unref (tmp_caps);
-  }
-}
-
-
-/**
- * get_srcpad_current_format:
- * @element: element to get the format from
- *
- * Helper function to get the negotiated fourcc
- * format from @element src pad.
- *
- * Returns: negotiated format (fourcc), 0 if not found
- */
-static guint32
-get_srcpad_current_format (GstElement * element)
-{
-  GstPad *srcpad = NULL;
-  GstCaps *srccaps = NULL;
-  GstStructure *structure;
-  guint32 format = 0;
-
-  g_return_val_if_fail (element != NULL, 0);
-
-  if ((srcpad = gst_element_get_static_pad (element, "src")) == NULL) {
-    goto no_pad;
-  }
-
-  if ((srccaps = gst_pad_get_negotiated_caps (srcpad)) == NULL) {
-    goto no_caps;
-  }
-
-  GST_LOG ("negotiated caps %" GST_PTR_FORMAT, srccaps);
-
-  structure = gst_caps_get_structure (srccaps, 0);
-  if (gst_structure_has_field (structure, "format")) {
-    gst_structure_get_fourcc (structure, "format", &format);
-  }
-
-  gst_caps_unref (srccaps);
-no_caps:
-  gst_object_unref (srcpad);
-no_pad:
-  GST_DEBUG ("current format for %" GST_PTR_FORMAT ": %" GST_FOURCC_FORMAT,
-      element, GST_FOURCC_ARGS (format));
-  return format;
-}
-
-/*
- * gst_camerabin_find_better_framerate:
- * @camera: camerabin object
- * @st: structure that contains framerate candidates
- * @orig_framerate: best framerate so far
- *
- * Looks for framerate better than @orig_framerate from @st structure.
- * In night mode lowest framerate is considered best, otherwise highest is
- * best.
- *
- * Returns: @orig_framerate or better if found
- */
-static const GValue *
-gst_camerabin_find_better_framerate (GstCameraBin * camera, GstStructure * st,
-    const GValue * orig_framerate)
-{
-  const GValue *framerate = NULL;
-  guint i, i_best, list_size;
-  gint res, comparison;
-
-  if (camera->night_mode) {
-    GST_LOG_OBJECT (camera, "finding min framerate in %" GST_PTR_FORMAT, st);
-    comparison = GST_VALUE_LESS_THAN;
-  } else {
-    GST_LOG_OBJECT (camera, "finding max framerate in %" GST_PTR_FORMAT, st);
-    comparison = GST_VALUE_GREATER_THAN;
-  }
-
-  if (gst_structure_has_field (st, "framerate")) {
-    framerate = gst_structure_get_value (st, "framerate");
-    /* Handle framerate lists */
-    if (GST_VALUE_HOLDS_LIST (framerate)) {
-      list_size = gst_value_list_get_size (framerate);
-      GST_LOG_OBJECT (camera, "finding framerate from list");
-      for (i = 0, i_best = 0; i < list_size; i++) {
-        res = gst_value_compare (gst_value_list_get_value (framerate, i),
-            gst_value_list_get_value (framerate, i_best));
-        if (comparison == res) {
-          i_best = i;
-        }
-      }
-      GST_LOG_OBJECT (camera, "found best framerate from index %d", i_best);
-      framerate = gst_value_list_get_value (framerate, i_best);
-    }
-    /* Handle framerate ranges */
-    if (GST_VALUE_HOLDS_FRACTION_RANGE (framerate)) {
-      if (camera->night_mode) {
-        GST_LOG_OBJECT (camera, "getting min framerate from range");
-        framerate = gst_value_get_fraction_range_min (framerate);
-      } else {
-        GST_LOG_OBJECT (camera, "getting max framerate from range");
-        framerate = gst_value_get_fraction_range_max (framerate);
-      }
-    }
-  }
-
-  /* Check if we found better framerate */
-  if (orig_framerate && framerate) {
-    res = gst_value_compare (orig_framerate, framerate);
-    if (comparison == res) {
-      GST_LOG_OBJECT (camera, "original framerate was the best");
-      framerate = orig_framerate;
-    }
-  }
-
-  return framerate;
-}
-
-/*
- * gst_camerabin_update_aspect_filter:
- * @camera: camerabin object
- * @new_caps: new caps of next buffers arriving to view finder sink element
- *
- * Updates aspect ratio capsfilter to maintain aspect ratio, if we need to
- * scale frames for showing them in view finder.
- */
-static void
-gst_camerabin_update_aspect_filter (GstCameraBin * camera, GstCaps * new_caps)
-{
-  if (camera->flags & GST_CAMERABIN_FLAG_VIEWFINDER_SCALE) {
-    GstCaps *sink_caps, *ar_caps;
-    GstStructure *st;
-    gint in_w = 0, in_h = 0, sink_w = 0, sink_h = 0, target_w = 0, target_h = 0;
-    gdouble ratio_w, ratio_h;
-    GstPad *sink_pad;
-    const GValue *range;
-
-    sink_pad = gst_element_get_static_pad (camera->view_sink, "sink");
-
-    if (sink_pad) {
-      sink_caps = gst_pad_get_caps (sink_pad);
-      gst_object_unref (sink_pad);
-      if (sink_caps) {
-        if (!gst_caps_is_any (sink_caps)) {
-          GST_DEBUG_OBJECT (camera, "sink element caps %" GST_PTR_FORMAT,
-              sink_caps);
-          /* Get maximum resolution that view finder sink accepts */
-          st = gst_caps_get_structure (sink_caps, 0);
-          if (gst_structure_has_field_typed (st, "width", GST_TYPE_INT_RANGE)) {
-            range = gst_structure_get_value (st, "width");
-            sink_w = gst_value_get_int_range_max (range);
-          }
-          if (gst_structure_has_field_typed (st, "height", GST_TYPE_INT_RANGE)) {
-            range = gst_structure_get_value (st, "height");
-            sink_h = gst_value_get_int_range_max (range);
-          }
-          GST_DEBUG_OBJECT (camera, "sink element accepts max %dx%d", sink_w,
-              sink_h);
-
-          /* Get incoming frames' resolution */
-          if (sink_h && sink_w) {
-            st = gst_caps_get_structure (new_caps, 0);
-            gst_structure_get_int (st, "width", &in_w);
-            gst_structure_get_int (st, "height", &in_h);
-            GST_DEBUG_OBJECT (camera, "new caps with %dx%d", in_w, in_h);
-          }
-        }
-        gst_caps_unref (sink_caps);
-      }
-    }
-
-    /* If we get bigger frames than view finder sink accepts, then we scale.
-       If we scale we need to adjust aspect ratio capsfilter caps in order
-       to maintain aspect ratio while scaling. */
-    if (in_w && in_h && (in_w > sink_w || in_h > sink_h)) {
-      ratio_w = (gdouble) sink_w / in_w;
-      ratio_h = (gdouble) sink_h / in_h;
-
-      if (ratio_w < ratio_h) {
-        target_w = sink_w;
-        target_h = (gint) (ratio_w * in_h);
-      } else {
-        target_w = (gint) (ratio_h * in_w);
-        target_h = sink_h;
-      }
-
-      GST_DEBUG_OBJECT (camera, "setting %dx%d filter to maintain aspect ratio",
-          target_w, target_h);
-      ar_caps = gst_caps_copy (new_caps);
-      gst_caps_set_simple (ar_caps, "width", G_TYPE_INT, target_w, "height",
-          G_TYPE_INT, target_h, NULL);
-    } else {
-      GST_DEBUG_OBJECT (camera, "no scaling");
-      ar_caps = new_caps;
-    }
-
-    GST_DEBUG_OBJECT (camera, "aspect ratio filter caps %" GST_PTR_FORMAT,
-        ar_caps);
-    g_object_set (G_OBJECT (camera->aspect_filter), "caps", ar_caps, NULL);
-    if (ar_caps != new_caps)
-      gst_caps_unref (ar_caps);
-  }
-}
-
-/*
- * gst_camerabin_finish_image_capture:
- * @camera: camerabin object
- *
- * Perform finishing operations after image capture is done and
- * returning back to view finder mode.
- */
-static void
-gst_camerabin_finish_image_capture (GstCameraBin * camera)
-{
-  if (camera->image_capture_caps) {
-    /* If we used specific caps for image capture we need to 
-       restore the caps and zoom/crop for view finder mode */
-    if (camera->src_zoom_crop) {
-      GST_DEBUG_OBJECT (camera, "resetting crop in camerabin");
-      g_object_set (camera->src_zoom_crop, "left", 0, "right", 0,
-          "top", 0, "bottom", 0, NULL);
-    }
-    camera->base_crop_left = 0;
-    camera->base_crop_right = 0;
-    camera->base_crop_top = 0;
-    camera->base_crop_bottom = 0;
-    gst_camerabin_set_capsfilter_caps (camera, camera->view_finder_caps);
-  }
-}
-
-/*
- * gst_camerabin_adapt_image_capture:
- * @camera: camerabin object
- * @in_caps: caps object that describes incoming image format
- *
- * Adjust capsfilters and crop according image capture caps if necessary.
- * The captured image format from video source might be different from
- * what application requested, so we can try to fix that in camerabin.
- *
- */
-static void
-gst_camerabin_adapt_image_capture (GstCameraBin * camera, GstCaps * in_caps)
-{
-  GstStructure *in_st, *new_st, *req_st;
-  gint in_width = 0, in_height = 0, req_width = 0, req_height = 0, crop = 0;
-  gdouble ratio_w, ratio_h;
-  GstCaps *filter_caps = NULL;
-
-  GST_LOG_OBJECT (camera, "in caps: %" GST_PTR_FORMAT, in_caps);
-  GST_LOG_OBJECT (camera, "requested caps: %" GST_PTR_FORMAT,
-      camera->image_capture_caps);
-
-  in_st = gst_caps_get_structure (in_caps, 0);
-  gst_structure_get_int (in_st, "width", &in_width);
-  gst_structure_get_int (in_st, "height", &in_height);
-
-  req_st = gst_caps_get_structure (camera->image_capture_caps, 0);
-  gst_structure_get_int (req_st, "width", &req_width);
-  gst_structure_get_int (req_st, "height", &req_height);
-
-  GST_INFO_OBJECT (camera, "we requested %dx%d, and got %dx%d", req_width,
-      req_height, in_width, in_height);
-
-  new_st = gst_structure_copy (req_st);
-  /* If new fields have been added, we need to copy them */
-  gst_structure_foreach (in_st, copy_missing_fields, new_st);
-
-  if (!(camera->flags & GST_CAMERABIN_FLAG_SOURCE_RESIZE)) {
-    GST_DEBUG_OBJECT (camera,
-        "source-resize flag disabled, unable to adapt resolution");
-    gst_structure_set (new_st, "width", G_TYPE_INT, in_width, "height",
-        G_TYPE_INT, in_height, NULL);
-  }
-
-  GST_LOG_OBJECT (camera, "new image capture caps: %" GST_PTR_FORMAT, new_st);
-
-  /* Crop if requested aspect ratio differs from incoming frame aspect ratio */
-  if (camera->src_zoom_crop) {
-
-    ratio_w = (gdouble) in_width / req_width;
-    ratio_h = (gdouble) in_height / req_height;
-
-    if (ratio_w < ratio_h) {
-      crop = in_height - (req_height * ratio_w);
-      camera->base_crop_top = crop / 2;
-      camera->base_crop_bottom = crop / 2;
-    } else {
-      crop = in_width - (req_width * ratio_h);
-      camera->base_crop_left = crop / 2;
-      camera->base_crop_right += crop / 2;
-    }
-
-    GST_INFO_OBJECT (camera,
-        "setting base crop: left:%d, right:%d, top:%d, bottom:%d",
-        camera->base_crop_left, camera->base_crop_right, camera->base_crop_top,
-        camera->base_crop_bottom);
-    g_object_set (G_OBJECT (camera->src_zoom_crop), "top",
-        camera->base_crop_top, "bottom", camera->base_crop_bottom, "left",
-        camera->base_crop_left, "right", camera->base_crop_right, NULL);
-  }
-
-  /* Update capsfilters */
-  gst_caps_replace (&camera->image_capture_caps,
-      gst_caps_new_full (new_st, NULL));
-  gst_camerabin_set_capsfilter_caps (camera, camera->image_capture_caps);
-
-  /* Adjust the capsfilter before crop and videoscale elements if necessary */
-  if (in_width == camera->width && in_height == camera->height) {
-    GST_DEBUG_OBJECT (camera, "no adaptation with resolution needed");
-  } else {
-    GST_DEBUG_OBJECT (camera,
-        "changing %" GST_PTR_FORMAT " from %dx%d to %dx%d", camera->src_filter,
-        camera->width, camera->height, in_width, in_height);
-    /* Apply the width and height to filter caps */
-    g_object_get (G_OBJECT (camera->src_filter), "caps", &filter_caps, NULL);
-    filter_caps = gst_caps_make_writable (filter_caps);
-    gst_caps_set_simple (filter_caps, "width", G_TYPE_INT, in_width, "height",
-        G_TYPE_INT, in_height, NULL);
-    g_object_set (G_OBJECT (camera->src_filter), "caps", filter_caps, NULL);
-    gst_caps_unref (filter_caps);
-  }
-}
-
 static void
 gst_camerabin_proxy_notify_cb (GObject * video_source, GParamSpec * pspec,
     gpointer user_data)
@@ -2457,18 +1558,19 @@ gst_camerabin_proxy_notify_cb (GObject * video_source, GParamSpec * pspec,
 static void
 gst_camerabin_monitor_video_source_properties (GstCameraBin * camera)
 {
+  GstPhotography *photography;
   GParamSpec **properties;
   gchar *notify_string;
   gpointer photo_iface;
   guint i, n_properties = 0;
 
   GST_DEBUG_OBJECT (camera, "checking for photography interface support");
-  if (GST_IS_ELEMENT (camera->src_vid_src) &&
-      gst_element_implements_interface (camera->src_vid_src,
-          GST_TYPE_PHOTOGRAPHY)) {
+  photography =
+      gst_base_camera_src_get_photography (GST_BASE_CAMERA_SRC
+      (camera->srcbin));
+  if (photography) {
     GST_DEBUG_OBJECT (camera,
-        "start monitoring property changes in %" GST_PTR_FORMAT,
-        camera->src_vid_src);
+        "start monitoring property changes in %" GST_PTR_FORMAT, photography);
     photo_iface = g_type_default_interface_ref (GST_TYPE_PHOTOGRAPHY);
     properties =
         g_object_interface_list_properties (photo_iface, &n_properties);
@@ -2478,51 +1580,14 @@ gst_camerabin_monitor_video_source_properties (GstCameraBin * camera)
             g_strconcat ("notify::", g_param_spec_get_name (properties[i]),
             NULL);
         GST_DEBUG_OBJECT (camera, "connecting to %" GST_PTR_FORMAT " - %s",
-            camera->src_vid_src, notify_string);
-        g_signal_connect (G_OBJECT (camera->src_vid_src), notify_string,
+            photography, notify_string);
+        g_signal_connect (G_OBJECT (photography), notify_string,
             (GCallback) gst_camerabin_proxy_notify_cb, camera);
         g_free (notify_string);
       }
     }
     g_type_default_interface_unref (photo_iface);
   }
-}
-
-/*
- * gst_camerabin_configure_format:
- * @camera: camerabin object
- * @caps: caps describing new format
- *
- * Configure internal video format for camerabin.
- *
- */
-static void
-gst_camerabin_configure_format (GstCameraBin * camera, GstCaps * caps)
-{
-  GstStructure *st;
-
-  st = gst_caps_get_structure (caps, 0);
-
-  gst_structure_get_int (st, "width", &camera->width);
-  gst_structure_get_int (st, "height", &camera->height);
-
-  if (gst_structure_has_field_typed (st, "framerate", GST_TYPE_FRACTION)) {
-    gst_structure_get_fraction (st, "framerate", &camera->fps_n,
-        &camera->fps_d);
-  }
-}
-
-static gboolean
-copy_missing_fields (GQuark field_id, const GValue * value, gpointer user_data)
-{
-  GstStructure *st = (GstStructure *) user_data;
-  const GValue *val = gst_structure_id_get_value (st, field_id);
-
-  if (G_UNLIKELY (val == NULL)) {
-    gst_structure_id_set_value (st, field_id, value);
-  }
-
-  return TRUE;
 }
 
 /*
@@ -3076,27 +2141,9 @@ gst_camerabin_init (GstCameraBin * camera, GstCameraBinClass * gclass)
   camera->stop_requested = FALSE;
   camera->paused = FALSE;
   camera->capturing = FALSE;
-  camera->night_mode = FALSE;
   camera->eos_handled = FALSE;
 
-  camera->width = DEFAULT_WIDTH;
-  camera->height = DEFAULT_HEIGHT;
-  camera->fps_n = DEFAULT_FPS_N;
-  camera->fps_d = DEFAULT_FPS_D;
-  camera->image_capture_width = 0;
-  camera->image_capture_height = 0;
-  camera->base_crop_left = 0;
-  camera->base_crop_right = 0;
-  camera->base_crop_top = 0;
-  camera->base_crop_bottom = 0;
-
   camera->event_tags = gst_tag_list_new ();
-
-  camera->image_capture_caps = NULL;
-  camera->view_finder_caps = NULL;
-  camera->allowed_caps = NULL;
-
-  camera->zoom = DEFAULT_ZOOM;
 
   /* concurrency control */
   camera->capture_mutex = g_mutex_new ();
@@ -3104,12 +2151,14 @@ gst_camerabin_init (GstCameraBin * camera, GstCameraBinClass * gclass)
 
   /* pad names for output and input selectors */
   camera->pad_src_view = NULL;
-  camera->pad_view_src = NULL;
   camera->pad_src_img = NULL;
   camera->pad_src_vid = NULL;
-  camera->pad_view_vid = NULL;
 
   camera->video_preview_buffer = NULL;
+
+  /* camera src bin */
+  camera->srcbin = g_object_new (GST_TYPE_V4L2_CAMERA_SRC, NULL);
+  gst_object_ref (camera->srcbin);      /* XXX why is this? */
 
   /* image capture bin */
   camera->imgbin = g_object_new (GST_TYPE_CAMERABIN_IMAGE, NULL);
@@ -3120,23 +2169,12 @@ gst_camerabin_init (GstCameraBin * camera, GstCameraBinClass * gclass)
   gst_object_ref (camera->vidbin);
 
   /* view finder elements */
-  camera->view_in_sel = NULL;
   camera->view_scale = NULL;
   camera->aspect_filter = NULL;
   camera->view_sink = NULL;
 
   camera->app_vf_sink = NULL;
   camera->app_viewfinder_filter = NULL;
-
-  /* source elements */
-  camera->src_vid_src = NULL;
-  camera->src_filter = NULL;
-  camera->src_zoom_crop = NULL;
-  camera->src_zoom_scale = NULL;
-  camera->src_zoom_filter = NULL;
-  camera->src_out_sel = NULL;
-
-  camera->app_video_filter = NULL;
 
   camera->active_bin = NULL;
 
@@ -3235,12 +2273,6 @@ gst_camerabin_set_property (GObject * object, guint prop_id,
       gst_camerabin_video_set_mute (GST_CAMERABIN_VIDEO (camera->vidbin),
           g_value_get_boolean (value));
       break;
-    case ARG_ZOOM:
-      g_atomic_int_set (&camera->zoom, g_value_get_int (value));
-      /* does not set it if in NULL, the src is not created yet */
-      if (GST_STATE (camera) != GST_STATE_NULL)
-        gst_camerabin_setup_zoom (camera);
-      break;
     case ARG_MODE:
       gst_camerabin_change_mode (camera, g_value_get_enum (value));
       break;
@@ -3311,19 +2343,6 @@ gst_camerabin_set_property (GObject * object, guint prop_id,
           gst_object_ref (camera->app_vf_sink);
       }
       break;
-    case ARG_VIDEO_SRC:
-      if (GST_STATE (camera) != GST_STATE_NULL) {
-        GST_ELEMENT_ERROR (camera, CORE, FAILED,
-            ("camerabin must be in NULL state when setting the video source element"),
-            (NULL));
-      } else {
-        if (camera->app_vid_src)
-          gst_object_unref (camera->app_vid_src);
-        camera->app_vid_src = g_value_get_object (value);
-        if (camera->app_vid_src)
-          gst_object_ref (camera->app_vid_src);
-      }
-      break;
     case ARG_AUDIO_SRC:
       if (GST_STATE (camera->vidbin) != GST_STATE_NULL) {
         GST_WARNING_OBJECT (camera,
@@ -3331,27 +2350,6 @@ gst_camerabin_set_property (GObject * object, guint prop_id,
       }
       gst_camerabin_video_set_audio_src (GST_CAMERABIN_VIDEO (camera->vidbin),
           g_value_get_object (value));
-      break;
-    case ARG_VIDEO_SOURCE_FILTER:
-      if (GST_STATE (camera) != GST_STATE_NULL) {
-        GST_ELEMENT_ERROR (camera, CORE, FAILED,
-            ("camerabin must be in NULL state when setting the video filter element"),
-            (NULL));
-      } else {
-        if (camera->app_video_filter)
-          gst_object_unref (camera->app_video_filter);
-        camera->app_video_filter = g_value_dup_object (value);
-      }
-      break;
-    case ARG_FILTER_CAPS:
-      GST_OBJECT_LOCK (camera);
-      gst_caps_replace (&camera->view_finder_caps,
-          (GstCaps *) gst_value_get_caps (value));
-      GST_OBJECT_UNLOCK (camera);
-      if (!camera->view_finder_caps)
-        camera->view_finder_caps =
-            gst_caps_from_string (CAMERABIN_DEFAULT_VF_CAPS);
-      gst_camerabin_configure_format (camera, camera->view_finder_caps);
       break;
     case ARG_PREVIEW_CAPS:
     {
@@ -3402,59 +2400,18 @@ gst_camerabin_set_property (GObject * object, guint prop_id,
       gst_camerabin_change_viewfinder_blocking (camera,
           g_value_get_boolean (value));
       break;
+    case ARG_ZOOM:
+    case ARG_FILTER_CAPS:
+    case ARG_VIDEO_SOURCE_FILTER:
+    case ARG_VIDEO_SRC:
     case ARG_IMAGE_CAPTURE_WIDTH:
-    {
-      gint width = g_value_get_int (value);
-
-      if (width != camera->image_capture_width) {
-        camera->image_capture_width = width;
-        camera->image_capture_caps_update = TRUE;
-      }
-    }
-      break;
     case ARG_IMAGE_CAPTURE_HEIGHT:
-    {
-      gint height = g_value_get_int (value);
-
-      if (height != camera->image_capture_height) {
-        camera->image_capture_height = height;
-        camera->image_capture_caps_update = TRUE;
-      }
-    }
-      break;
     case ARG_VIDEO_CAPTURE_WIDTH:
-    {
-      gint width = g_value_get_int (value);
-
-      if (width != camera->width) {
-        camera->width = width;
-        camera->video_capture_caps_update = TRUE;
-      }
-    }
-      break;
     case ARG_VIDEO_CAPTURE_HEIGHT:
-    {
-      gint height = g_value_get_int (value);
-
-      if (height != camera->height) {
-        camera->height = height;
-        camera->video_capture_caps_update = TRUE;
-      }
-    }
-      break;
     case ARG_VIDEO_CAPTURE_FRAMERATE:
-    {
-      gint fps_n, fps_d;
-
-      fps_n = gst_value_get_fraction_numerator (value);
-      fps_d = gst_value_get_fraction_denominator (value);
-
-      if (fps_n != camera->fps_n || fps_d != camera->fps_d) {
-        camera->fps_n = fps_n;
-        camera->fps_d = fps_d;
-        camera->video_capture_caps_update = TRUE;
-      }
-    }
+      /* delegate these to camera srcbin */
+      g_object_set_property (G_OBJECT (camera->srcbin),
+          g_param_spec_get_name (pspec), value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -3484,9 +2441,6 @@ gst_camerabin_get_property (GObject * object, guint prop_id,
     case ARG_MUTE:
       g_value_set_boolean (value,
           gst_camerabin_video_get_mute (GST_CAMERABIN_VIDEO (camera->vidbin)));
-      break;
-    case ARG_ZOOM:
-      g_value_set_int (value, g_atomic_int_get (&camera->zoom));
       break;
     case ARG_IMAGE_POST:
       g_value_set_object (value,
@@ -3522,25 +2476,15 @@ gst_camerabin_get_property (GObject * object, guint prop_id,
       else
         g_value_set_object (value, camera->app_vf_sink);
       break;
-    case ARG_VIDEO_SRC:
-      if (camera->src_vid_src)
-        g_value_set_object (value, camera->src_vid_src);
-      else
-        g_value_set_object (value, camera->app_vid_src);
-      break;
     case ARG_AUDIO_SRC:
       g_value_set_object (value,
           gst_camerabin_video_get_audio_src (GST_CAMERABIN_VIDEO
               (camera->vidbin)));
       break;
-    case ARG_VIDEO_SOURCE_FILTER:
-      g_value_set_object (value, camera->app_video_filter);
-      break;
     case ARG_INPUT_CAPS:
-      gst_value_set_caps (value, gst_camerabin_get_allowed_input_caps (camera));
-      break;
-    case ARG_FILTER_CAPS:
-      gst_value_set_caps (value, camera->view_finder_caps);
+      gst_value_set_caps (value,
+          gst_base_camera_src_get_allowed_input_caps (GST_BASE_CAMERA_SRC
+              (camera->srcbin)));
       break;
     case ARG_PREVIEW_CAPS:
       if (camera->mode == MODE_IMAGE)
@@ -3554,20 +2498,18 @@ gst_camerabin_get_property (GObject * object, guint prop_id,
     case ARG_BLOCK_VIEWFINDER:
       g_value_set_boolean (value, camera->block_viewfinder);
       break;
+    case ARG_ZOOM:
+    case ARG_FILTER_CAPS:
+    case ARG_VIDEO_SOURCE_FILTER:
+    case ARG_VIDEO_SRC:
     case ARG_IMAGE_CAPTURE_WIDTH:
-      g_value_set_int (value, camera->image_capture_width);
-      break;
     case ARG_IMAGE_CAPTURE_HEIGHT:
-      g_value_set_int (value, camera->image_capture_height);
-      break;
     case ARG_VIDEO_CAPTURE_WIDTH:
-      g_value_set_int (value, camera->width);
-      break;
     case ARG_VIDEO_CAPTURE_HEIGHT:
-      g_value_set_int (value, camera->height);
-      break;
     case ARG_VIDEO_CAPTURE_FRAMERATE:
-      gst_value_set_fraction (value, camera->fps_n, camera->fps_d);
+      /* delegate these to camera srcbin */
+      g_object_get_property (G_OBJECT (camera->srcbin),
+          g_param_spec_get_name (pspec), value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -3624,7 +2566,8 @@ gst_camerabin_change_state (GstElement * element, GstStateChange transition)
       gst_element_state_change_return_get_name (ret));
 
   switch (transition) {
-    case GST_STATE_CHANGE_PAUSED_TO_READY:
+    case GST_STATE_CHANGE_PAUSED_TO_READY:{
+      GstPhotography *photography;
       g_mutex_lock (camera->capture_mutex);
       if (camera->capturing) {
         GST_WARNING_OBJECT (camera, "was capturing when changing to READY");
@@ -3635,9 +2578,15 @@ gst_camerabin_change_state (GstElement * element, GstStateChange transition)
         g_cond_signal (camera->cond);
       }
       g_mutex_unlock (camera->capture_mutex);
-      g_signal_handlers_disconnect_by_func (camera->src_vid_src,
-          gst_camerabin_proxy_notify_cb, camera);
+      photography =
+          gst_base_camera_src_get_photography (GST_BASE_CAMERA_SRC
+          (camera->srcbin));
+      if (photography) {
+        g_signal_handlers_disconnect_by_func (photography,
+            gst_camerabin_proxy_notify_cb, camera);
+      }
       break;
+    }
     case GST_STATE_CHANGE_READY_TO_NULL:
       camerabin_destroy_elements (camera);
       break;
@@ -3814,8 +2763,8 @@ gst_camerabin_capture_pause (GstCameraBin * camera)
       gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PAUSED);
 
       /* Switch to view finder mode */
-      g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", FALSE,
-          "active-pad", camera->pad_src_view, NULL);
+      gst_base_camera_src_set_mode (GST_BASE_CAMERA_SRC (camera->srcbin),
+          MODE_PREVIEW);
 
       /* Set view finder to PLAYING and leave videobin PAUSED */
       gst_element_set_locked_state (camera->vidbin, TRUE);
@@ -3829,8 +2778,8 @@ gst_camerabin_capture_pause (GstCameraBin * camera)
       gst_element_set_state (GST_ELEMENT (camera), GST_STATE_PAUSED);
 
       /* Switch to video recording mode */
-      g_object_set (G_OBJECT (camera->src_out_sel), "resend-latest", TRUE,
-          "active-pad", camera->pad_src_vid, NULL);
+      gst_base_camera_src_set_mode (GST_BASE_CAMERA_SRC (camera->srcbin),
+          MODE_VIDEO);
 
       /* Bring all camerabin elements to PLAYING */
       gst_element_set_locked_state (camera->vidbin, FALSE);
@@ -3856,33 +2805,6 @@ gst_camerabin_set_video_resolution_fps (GstCameraBin * camera, gint width,
 }
 
 static void
-gst_camerabin_set_image_capture_caps (GstCameraBin * camera, gint width,
-    gint height)
-{
-  GstStructure *structure;
-  GstCaps *new_caps = NULL;
-
-  g_return_if_fail (camera != NULL);
-
-  if (width && height && camera->view_finder_caps) {
-    /* Use view finder mode caps as a basis */
-    structure = gst_caps_get_structure (camera->view_finder_caps, 0);
-
-    /* Set new resolution for image capture */
-    new_caps = gst_caps_new_simple (gst_structure_get_name (structure),
-        "width", G_TYPE_INT, width, "height", G_TYPE_INT, height, NULL);
-
-    /* Set allowed framerate for the resolution. */
-    gst_camerabin_set_allowed_framerate (camera, new_caps);
-  }
-
-  GST_INFO_OBJECT (camera,
-      "init filter caps for image capture %" GST_PTR_FORMAT, new_caps);
-  gst_caps_replace (&camera->image_capture_caps, new_caps);
-  camera->image_capture_caps_update = FALSE;
-}
-
-static void
 gst_camerabin_set_image_resolution (GstCameraBin * camera, gint width,
     gint height)
 {
@@ -3901,7 +2823,9 @@ plugin_init (GstPlugin * plugin)
   GST_DEBUG_CATEGORY_INIT (gst_camerabin_debug, "camerabin", 0, "CameraBin");
 
   return gst_element_register (plugin, "camerabin",
-      GST_RANK_NONE, GST_TYPE_CAMERABIN);
+      GST_RANK_NONE, GST_TYPE_CAMERABIN) &&
+      gst_element_register (plugin, "v4l2camerasrc",
+      GST_RANK_NONE, GST_TYPE_V4L2_CAMERA_SRC);
 }
 
 /* this is the structure that gstreamer looks for to register plugins

@@ -23,7 +23,7 @@
 
 #include <gst/gstbin.h>
 
-#include "gstcamerabin-enum.h"
+#include <gst/camerasrc/gstcamerabin-enum.h>
 
 G_BEGIN_DECLS
 #define GST_TYPE_CAMERABIN_IMAGE             (gst_camerabin_image_get_type())
