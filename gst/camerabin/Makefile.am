@@ -21,15 +21,17 @@ libgstcamerabin_la_SOURCES = gstcamerabin.c             \
 			  camerabinvideo.c           \
 			  camerabingeneral.c         \
 			  camerabinpreview.c         \
-			  gstcamerabin-enum.c
+			  gstv4l2camerasrc.c
 
 nodist_libgstcamerabin_la_SOURCES = $(built_sources)
 libgstcamerabin_la_CFLAGS = \
 	$(GST_PLUGINS_BAD_CFLAGS) \
+	-I$(top_srcdir)/gst-libs \
 	$(GST_CFLAGS) $(GST_BASE_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
 	-DGST_USE_UNSTABLE_API
 libgstcamerabin_la_LIBADD = \
 	$(top_builddir)/gst-libs/gst/interfaces/libgstphotography-$(GST_MAJORMINOR).la \
+	$(top_builddir)/gst-libs/gst/camerasrc/libgstcamerasrc-@GST_MAJORMINOR@.la \
 	$(GST_LIBS) $(GST_BASE_LIBS) $(GST_PLUGINS_BASE_LIBS) \
 	-lgstinterfaces-$(GST_MAJORMINOR) -lgsttag-$(GST_MAJORMINOR)
 
@@ -44,4 +46,4 @@ noinst_HEADERS = gstcamerabin.h             \
 		 camerabindebug.h           \
 		 camerabingeneral.h         \
 		 camerabinpreview.h         \
-		 gstcamerabin-enum.h
+		 gstv4l2camerasrc.h

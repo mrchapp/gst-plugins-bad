@@ -28,7 +28,7 @@
 #include <gst/gstbin.h>
 #include <gst/interfaces/photography.h>
 
-#include "gstcamerabin-enum.h"
+#include <gst/camerasrc/gstcamerabin-enum.h>
 #include "camerabinimage.h"
 #include "camerabinvideo.h"
 
@@ -59,7 +59,7 @@ struct _GstCameraBin
 
   /* private */
   GString *filename;
-  gint mode;                      /* MODE_IMAGE or MODE_VIDEO */
+  GstCameraBinMode mode;
   GstCameraBinFlags flags;
   gboolean stop_requested;        /* TRUE if capturing stop needed */
   gboolean paused;                /* TRUE if capturing paused */
@@ -84,13 +84,6 @@ struct _GstCameraBin
   gboolean block_viewfinder_prop; /* TRUE if viewfinder blocks after capture */
   gboolean block_viewfinder_trigger;
 
-  /* Resolution of the buffers configured to camerabin */
-  gint width;
-  gint height;
-  /* Frames per second configured to camerabin */
-  gint fps_n;
-  gint fps_d;
-
   /* app configured resolution/framerate */
   gint app_width;
   gint app_height;
@@ -99,31 +92,14 @@ struct _GstCameraBin
 
   gboolean video_capture_caps_update;
 
-  /* Image capture resolution */
-  gint image_capture_width;
-  gint image_capture_height;
-
   /* Image tags are collected here first before sending to imgbin */
   GstTagList *event_tags;
-
-  /* Caps applied to capsfilters when taking still image */
-  GstCaps *image_capture_caps;
-  gboolean image_capture_caps_update;
-
-  /* Caps applied to capsfilters when in view finder mode */
-  GstCaps *view_finder_caps;
-
-  /* Caps that videosrc supports */
-  GstCaps *allowed_caps;
 
   /* Caps used to create preview image */
   GstCaps *preview_caps;
 
   /* Caps used to create video preview image */
   GstCaps *video_preview_caps;
-
-  /* The digital zoom (from 1.0 to 10.0) */
-  gfloat zoom;
 
   /* concurrency control */
   GMutex *capture_mutex;
@@ -136,14 +112,17 @@ struct _GstCameraBin
 
   /* pad names for output and input selectors */
   GstPad *pad_src_view;
-  GstPad *pad_view_src;
   GstPad *pad_src_img;
   GstPad *pad_src_vid;
-  GstPad *pad_view_vid;
   GstPad *pad_src_queue;
 
+  /* note:  maybe img_queue moves into srcbin..
+   */
   GstElement *img_queue;        /* queue for decoupling capture from
                                    image-postprocessing and saving */
+
+
+  GstElement *srcbin;           /* bin that holds camera src elements */
   GstElement *imgbin;           /* bin that holds image capturing elements */
   GstElement *vidbin;           /*  bin that holds video capturing elements */
   GstElement *active_bin;       /* image or video bin that is currently in use */
@@ -152,42 +131,19 @@ struct _GstCameraBin
 
   GstBuffer *video_preview_buffer;      /* buffer for storing video preview */
 
-  /* source elements */
-  GstElement *src_vid_src;
-  GstElement *src_filter;
-  GstElement *src_zoom_crop;
-  GstElement *src_zoom_scale;
-  GstElement *src_zoom_filter;
-  GstElement *src_out_sel;
-
   /* view finder elements */
-  GstElement *view_in_sel;
   GstElement *aspect_filter;
   GstElement *view_scale;
   GstElement *view_sink;
 
   /* Application configurable elements */
-  GstElement *app_vid_src;
   GstElement *app_vf_sink;
-  GstElement *app_video_filter;
   GstElement *app_viewfinder_filter;
   GstElement *app_preview_source_filter;
   GstElement *app_video_preview_source_filter;
 
-  /* Night mode handling */
-  gboolean night_mode;
-  gint pre_night_fps_n;
-  gint pre_night_fps_d;
-
   /* Buffer probe id for captured image handling */
   gulong image_captured_id;
-
-  /* Optional base crop for frames. Used to crop frames e.g.
-     due to wrong aspect ratio, before the crop related to zooming. */
-  gint base_crop_top;
-  gint base_crop_bottom;
-  gint base_crop_left;
-  gint base_crop_right;
 };
 
 /**
@@ -212,19 +168,6 @@ struct _GstCameraBinClass
 
     gboolean (*img_done) (GstCameraBin * camera, const gchar * filename);
 };
-
-/**
- * GstCameraBinMode:
- * @MODE_IMAGE: image capture
- * @MODE_VIDEO: video capture
- *
- * Capture mode to use.
- */
-typedef enum
-{
-  MODE_IMAGE = 0,
-  MODE_VIDEO
-} GstCameraBinMode;
 
 GType gst_camerabin_get_type (void);
 

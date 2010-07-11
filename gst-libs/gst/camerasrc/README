@@ -1,0 +1,8 @@
+This directory contains GstBaseCameraSrc element used by camerabin, as well
+as a default implementation of GstSimpleV4l2CameraSrc
+
+(or should GstSimpleV4l2CameraSrc go in camerabin?  I don't quite see the
+use case to further subclass GstSimpleV4l2CameraSrc, although that doesn't
+necessarily mean that there isn't one..)
+
+See http://gstreamer.freedesktop.org/wiki/CameraBin

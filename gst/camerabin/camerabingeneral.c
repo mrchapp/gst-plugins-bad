@@ -48,12 +48,33 @@ GST_DEBUG_CATEGORY (gst_camerabin_debug);
 gboolean
 gst_camerabin_add_element (GstBin * bin, GstElement * new_elem)
 {
+  return gst_camerabin_add_element_full (bin, NULL, new_elem, NULL);
+}
+
+/**
+ * gst_camerabin_add_element_full:
+ * @bin: add an element to this bin
+ * @srcpad:  src pad name, or NULL for any
+ * @new_elem: new element to be added
+ * @dstpad:  dst pad name, or NULL for any
+ *
+ * Adds given element to given @bin. Looks for an unconnected src pad
+ * (with name @srcpad, if specified) from the @bin and links the element
+ * to it.  Raises an error if adding or linking failed. Unrefs the element
+ * in the case of an error.
+ *
+ * Returns: %TRUE if adding and linking succeeded, %FALSE otherwise.
+ */
+gboolean
+gst_camerabin_add_element_full (GstBin * bin, const gchar * srcpad,
+    GstElement * new_elem, const gchar * dstpad)
+{
   gboolean ret;
 
   g_return_val_if_fail (bin, FALSE);
   g_return_val_if_fail (new_elem, FALSE);
 
-  ret = gst_camerabin_try_add_element (bin, new_elem);
+  ret = gst_camerabin_try_add_element (bin, srcpad, new_elem, dstpad);
 
   if (!ret) {
     gchar *elem_name = gst_element_get_name (new_elem);
@@ -69,15 +90,19 @@ gst_camerabin_add_element (GstBin * bin, GstElement * new_elem)
 /**
  * gst_camerabin_try_add_element:
  * @bin: tries adding an element to this bin
+ * @srcpad:  src pad name, or NULL for any
  * @new_elem: new element to be added
+ * @dstpad:  dst pad name, or NULL for any
  *
  * Adds given element to given @bin. Looks for an unconnected src pad
- * from the @bin and links the element to it.
+ * (with name @srcpad, if specified) from the @bin and links the element to
+ * it.
  *
  * Returns: %TRUE if adding and linking succeeded, %FALSE otherwise.
  */
 gboolean
-gst_camerabin_try_add_element (GstBin * bin, GstElement * new_elem)
+gst_camerabin_try_add_element (GstBin * bin, const gchar * srcpad,
+    GstElement * new_elem, const gchar * dstpad)
 {
   GstPad *bin_pad;
   GstElement *bin_elem;
@@ -96,7 +121,7 @@ gst_camerabin_try_add_element (GstBin * bin, GstElement * new_elem)
         GST_DEBUG_PAD_NAME (bin_pad));
     bin_elem = gst_pad_get_parent_element (bin_pad);
     gst_object_unref (bin_pad);
-    if (!gst_element_link_pads_full (bin_elem, NULL, new_elem, NULL,
+    if (!gst_element_link_pads_full (bin_elem, srcpad, new_elem, dstpad,
             GST_PAD_LINK_CHECK_CAPS)) {
       gst_object_ref (new_elem);
       gst_bin_remove (bin, new_elem);

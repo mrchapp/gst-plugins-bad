@@ -23,7 +23,7 @@
 
 #include <gst/gstbin.h>
 
-#include "gstcamerabin-enum.h"
+#include <gst/camerasrc/gstcamerabin-enum.h>
 
 G_BEGIN_DECLS
 #define ARG_DEFAULT_MUTE FALSE
@@ -58,11 +58,9 @@ struct _GstCameraBinVideo
 
   /* Sink and src pads of video bin */
   GstPad *sinkpad;
-  GstPad *srcpad;
 
-  /* Tee src pads leading to video encoder and view finder */
-  GstPad *tee_video_srcpad;
-  GstPad *tee_vf_srcpad;
+  /* srcpad out of queue at head of video-bin */
+  GstPad *queue_video_srcpad;
 
   /* Application set elements */
   GstElement *app_post;         /* Video post processing */
@@ -74,7 +72,6 @@ struct _GstCameraBinVideo
   /* Other elements */
   GstElement *aud_src;          /* Audio source */
   GstElement *sink;             /* Sink for recorded video */
-  GstElement *tee;              /* Split output to view finder and recording sink */
   GstElement *volume;           /* Volume for muting */
   GstElement *video_queue;      /* Buffer for raw video frames */
   GstElement *vid_enc;          /* Video encoder */
@@ -85,8 +82,7 @@ struct _GstCameraBinVideo
 
   /* Probe IDs */
   gulong aud_src_probe_id;
-  gulong vid_src_probe_id;
-  gulong vid_tee_probe_id;
+  gulong vid_queue_probe_id;
   gulong vid_sink_probe_id;
 
   gboolean mute;

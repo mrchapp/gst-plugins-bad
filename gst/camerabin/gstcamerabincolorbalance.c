@@ -26,6 +26,7 @@
 #include <config.h>
 #endif
 
+#include <gst/camerasrc/gstbasecamerasrc.h>
 #include "gstcamerabincolorbalance.h"
 #include "gstcamerabin.h"
 
@@ -36,8 +37,10 @@
 static const GList *
 gst_camerabin_color_balance_list_channels (GstColorBalance * cb)
 {
-  if (cb && GST_CAMERABIN (cb)->src_vid_src) {
-    GstColorBalance *cbl = GST_COLOR_BALANCE (GST_CAMERABIN (cb)->src_vid_src);
+  if (cb) {
+    GstColorBalance *cbl =
+        gst_base_camera_src_get_color_balance (GST_BASE_CAMERA_SRC
+        (GST_CAMERABIN (cb)->srcbin));
     return gst_color_balance_list_channels (cbl);
   } else {
     return NULL;
@@ -48,8 +51,10 @@ static void
 gst_camerabin_color_balance_set_value (GstColorBalance * cb,
     GstColorBalanceChannel * channel, gint value)
 {
-  if (cb && GST_CAMERABIN (cb)->src_vid_src) {
-    GstColorBalance *cbl = GST_COLOR_BALANCE (GST_CAMERABIN (cb)->src_vid_src);
+  if (cb) {
+    GstColorBalance *cbl =
+        gst_base_camera_src_get_color_balance (GST_BASE_CAMERA_SRC
+        (GST_CAMERABIN (cb)->srcbin));
     gst_color_balance_set_value (cbl, channel, value);
   }
 }
@@ -58,8 +63,10 @@ static gint
 gst_camerabin_color_balance_get_value (GstColorBalance * cb,
     GstColorBalanceChannel * channel)
 {
-  if (cb && GST_CAMERABIN (cb)->src_vid_src) {
-    GstColorBalance *cbl = GST_COLOR_BALANCE (GST_CAMERABIN (cb)->src_vid_src);
+  if (cb) {
+    GstColorBalance *cbl =
+        gst_base_camera_src_get_color_balance (GST_BASE_CAMERA_SRC
+        (GST_CAMERABIN (cb)->srcbin));
     return gst_color_balance_get_value (cbl, channel);
   } else {
     return 0;
