@@ -1380,6 +1380,7 @@ gst_h264_parse_sink_setcaps (GstPad * pad, GstCaps * caps)
 {
   GstH264Parse *h264parse;
   GstStructure *str;
+  GstCaps *src_caps = NULL;
   const GValue *value;
   guint8 *data;
   guint size, num_sps, num_pps;
@@ -1393,6 +1394,25 @@ gst_h264_parse_sink_setcaps (GstPad * pad, GstCaps * caps)
   gst_structure_get_int (str, "height", &h264parse->height);
   gst_structure_get_fraction (str, "framerate", &h264parse->fps_num,
       &h264parse->fps_den);
+
+  /****** WORKAROUND **********/
+  /* don't treat codec-data as an AVC format codec-data, but treat it like a
+   * normal byte-stream buffer, and handle like bytestream.
+   */
+  /* need to remove the codec_data */
+  if (G_UNLIKELY (h264parse->src_caps == NULL)) {
+    src_caps = gst_caps_copy (caps);
+  } else {
+    src_caps = gst_caps_ref (h264parse->src_caps);
+  }
+  src_caps = gst_caps_make_writable (src_caps);
+  g_return_val_if_fail (src_caps != NULL, FALSE);
+  str = gst_caps_get_structure (src_caps, 0);
+  if (gst_structure_has_field (str, "codec_data")) {
+    gst_structure_remove_field (str, "codec_data");
+    gst_caps_replace (&h264parse->src_caps, src_caps);
+  }
+  /******** END WORKAROUND ************/
 
   /* packetized video has a codec_data */
   if ((value = gst_structure_get_value (str, "codec_data"))) {
@@ -1475,6 +1495,7 @@ gst_h264_parse_sink_setcaps (GstPad * pad, GstCaps * caps)
     /* we have 4 sync bytes */
     h264parse->nal_length_size = 4;
   }
+  gst_caps_unref (src_caps);
 
   /* forward the caps */
   return gst_h264_parse_update_src_caps (h264parse, caps);
