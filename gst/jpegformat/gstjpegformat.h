@@ -77,6 +77,7 @@ G_BEGIN_DECLS
 #define APP0      0xe0  /* Application marker */
 #define APP1      0xe1
 #define APP2      0xe2
+#define APP12     0xec  /* "Picture Info" used by old cameras */
 #define APP13     0xed
 #define APP14     0xee
 #define APP15     0xef
