@@ -610,22 +610,7 @@ gst_jpeg_parse_read_header (GstJpegParse * parse, GstBuffer * buffer)
         }
         break;
       }
-      case APP0:
-      case APP2:
-      case APP13:
-      case APP14:
-      case APP15:{
-        const gchar *id_str;
-        if (!gst_byte_reader_get_uint16_be (&reader, &size))
-          goto error;
-        if (!gst_byte_reader_get_string_utf8 (&reader, &id_str))
-          goto error;
-        if (!gst_byte_reader_skip (&reader, size - 3 - strlen (id_str)))
-          goto error;
-        GST_LOG_OBJECT (parse, "unhandled marker %x: '%s' skiping %u bytes",
-            marker, id_str, size - 2);
-        break;
-      }
+
       case DHT:
       case DQT:
         /* Ignore these codes */
@@ -675,6 +660,16 @@ gst_jpeg_parse_read_header (GstJpegParse * parse, GstBuffer * buffer)
           GST_LOG_OBJECT (parse, "unhandled marker %x skiping %u bytes", marker,
               size - 2);
 #endif
+        } else if (marker >= APP0 && marker <= APP15) {
+          const gchar *id_str;
+          if (!gst_byte_reader_get_uint16_be (&reader, &size))
+            goto error;
+          if (!gst_byte_reader_get_string_utf8 (&reader, &id_str))
+            goto error;
+          if (!gst_byte_reader_skip (&reader, size - 3 - strlen (id_str)))
+            goto error;
+          GST_LOG_OBJECT (parse, "application marker %x: '%s' skiping %u bytes",
+              marker, id_str, size - 2);
         } else {
           GST_WARNING_OBJECT (parse, "unhandled marker %x, leaving", marker);
           /* Not SOF or SOI.  Must not be a JPEG file (or file pointer
