@@ -1577,7 +1577,6 @@ gst_qt_mux_add_buffer (GstQTMux * qtmux, GstQTPad * pad, GstBuffer * buf)
 
   last_buf = pad->last_buf;
   if (last_buf == NULL) {
-#ifndef GST_DISABLE_GST_DEBUG
     if (buf == NULL) {
       GST_DEBUG_OBJECT (qtmux, "Pad %s has no previous buffer stored and "
           "received NULL buffer, doing nothing",
@@ -1586,8 +1585,17 @@ gst_qt_mux_add_buffer (GstQTMux * qtmux, GstQTPad * pad, GstBuffer * buf)
       GST_LOG_OBJECT (qtmux,
           "Pad %s has no previous buffer stored, storing now",
           GST_PAD_NAME (pad->collect.pad));
+      if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (buf))) {
+        pad->first_ts = GST_BUFFER_TIMESTAMP (buf);
+      } else {
+        GST_DEBUG_OBJECT (qtmux, "First buffer for pad %s has no timestamp, "
+            "using 0 as first timestamp", GST_PAD_NAME (pad->collect.pad));
+        pad->first_ts = 0;
+      }
+      GST_DEBUG_OBJECT (qtmux, "Stored first timestamp for pad %s %"
+          GST_TIME_FORMAT, GST_PAD_NAME (pad->collect.pad),
+          GST_TIME_ARGS (pad->first_ts));
     }
-#endif
     pad->last_buf = buf;
     return GST_FLOW_OK;
   } else
@@ -1757,20 +1765,6 @@ gst_qt_mux_add_buffer (GstQTMux * qtmux, GstQTPad * pad, GstBuffer * buf)
     GST_DEBUG_OBJECT (qtmux, "New longest chunk found: %" GST_TIME_FORMAT
         ", pad %s", GST_TIME_ARGS (duration), GST_PAD_NAME (pad->collect.pad));
     qtmux->longest_chunk = duration;
-  }
-
-  /* if this is the first buffer, store the timestamp */
-  if (G_UNLIKELY (pad->first_ts == GST_CLOCK_TIME_NONE) && last_buf) {
-    if (GST_CLOCK_TIME_IS_VALID (GST_BUFFER_TIMESTAMP (last_buf))) {
-      pad->first_ts = GST_BUFFER_TIMESTAMP (last_buf);
-    } else {
-      GST_DEBUG_OBJECT (qtmux, "First buffer for pad %s has no timestamp, "
-          "using 0 as first timestamp", GST_PAD_NAME (pad->collect.pad));
-      pad->first_ts = 0;
-    }
-    GST_DEBUG_OBJECT (qtmux, "Stored first timestamp for pad %s %"
-        GST_TIME_FORMAT, GST_PAD_NAME (pad->collect.pad),
-        GST_TIME_ARGS (pad->first_ts));
   }
 
   /* now we go and register this buffer/sample all over */
