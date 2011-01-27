@@ -317,6 +317,7 @@ AG_GST_CHECK_PLUGIN(tta)
 AG_GST_CHECK_PLUGIN(valve)
 AG_GST_CHECK_PLUGIN(videomaxrate)
 AG_GST_CHECK_PLUGIN(videomeasure)
+AG_GST_CHECK_PLUGIN(videoparsers)
 AG_GST_CHECK_PLUGIN(videosignal)
 AG_GST_CHECK_PLUGIN(vmnc)
 
@@ -1731,6 +1732,7 @@ gst/tta/Makefile
 gst/valve/Makefile
 gst/videomaxrate/Makefile
 gst/videomeasure/Makefile
+gst/videoparsers/Makefile
 gst/videosignal/Makefile
 gst/vmnc/Makefile
 gst-libs/Makefile
