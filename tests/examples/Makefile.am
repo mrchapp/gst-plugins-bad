@@ -1,5 +1,5 @@
 if HAVE_GTK
-GTK_EXAMPLES=camerabin mxf scaletempo
+GTK_EXAMPLES=camerabin camerabin2 mxf scaletempo
 else
 GTK_EXAMPLES=
 endif

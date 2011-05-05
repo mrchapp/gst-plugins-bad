@@ -269,6 +269,7 @@ AG_GST_CHECK_PLUGIN(audioparsers)
 AG_GST_CHECK_PLUGIN(autoconvert)
 AG_GST_CHECK_PLUGIN(bayer)
 AG_GST_CHECK_PLUGIN(camerabin)
+AG_GST_CHECK_PLUGIN(camerabin2)
 AG_GST_CHECK_PLUGIN(cdxaparse)
 AG_GST_CHECK_PLUGIN(coloreffects)
 AG_GST_CHECK_PLUGIN(dataurisrc)
@@ -1682,6 +1683,7 @@ gst/audioparsers/Makefile
 gst/autoconvert/Makefile
 gst/bayer/Makefile
 gst/camerabin/Makefile
+gst/camerabin2/Makefile
 gst/cdxaparse/Makefile
 gst/coloreffects/Makefile
 gst/dataurisrc/Makefile
@@ -1735,6 +1737,7 @@ gst/videosignal/Makefile
 gst/vmnc/Makefile
 gst-libs/Makefile
 gst-libs/gst/Makefile
+gst-libs/gst/basecamerabinsrc/Makefile
 gst-libs/gst/interfaces/Makefile
 gst-libs/gst/signalprocessor/Makefile
 gst-libs/gst/video/Makefile
@@ -1764,6 +1767,7 @@ tests/Makefile
 tests/check/Makefile
 tests/examples/Makefile
 tests/examples/camerabin/Makefile
+tests/examples/camerabin2/Makefile
 tests/examples/directfb/Makefile
 tests/examples/mxf/Makefile
 tests/examples/scaletempo/Makefile

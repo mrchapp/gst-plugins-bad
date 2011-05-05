@@ -14,7 +14,7 @@ TESTS_ENVIRONMENT = \
 	GST_PLUGIN_SYSTEM_PATH=					\
 	GST_PLUGIN_PATH=$(top_builddir)/gst:$(top_builddir)/sys:$(top_builddir)/ext:$(top_builddir)/../gst-ffmpeg/ext/ffmpeg:$(top_builddir)/../gst-plugins-good/gst:$(top_builddir)/../gst-plugins-good/sys:$(top_builddir)/../gst-plugins-good/ext:$(top_builddir)/../gst-plugins-ugly/gst:$(top_builddir)/../gst-plugins-ugly/sys:$(top_builddir)/../gst-plugins-ugly/ext:$(GSTPB_PLUGINS_DIR):$(GST_PLUGINS_DIR) \
 	GST_PLUGIN_LOADING_WHITELIST="gstreamer@$(GST_PLUGINS_DIR):gst-plugins-base@$(GSTPB_PLUGINS_DIR):gst-plugins-good:gst-plugins-ugly:gst-ffmpeg:gst-plugins-bad@$(top_builddir)" \
-	STATE_IGNORE_ELEMENTS="alsaspdifsink apexsink camerabin cdaudio dc1394src dccpclientsrc dccpclientsink dccpserversrc dccpserversink dvbsrc dvbbasebin dfbvideosink festival gsettingsvideosrc gsettingsvideosink gsettingsaudiosrc gsettingsaudiosink nassink rsndvdbin sdlaudiosink sdlvideosink vcdsrc rfbsrc vdpauyuvvideo vdpauvideoyuv vdpaumpegdec neonhttpsrc"
+	STATE_IGNORE_ELEMENTS="alsaspdifsink apexsink camerabin camerabin2 cdaudio dc1394src dccpclientsrc dccpclientsink dccpserversrc dccpserversink dvbsrc dvbbasebin dfbvideosink festival gsettingsvideosrc gsettingsvideosink gsettingsaudiosrc gsettingsaudiosink nassink rsndvdbin sdlaudiosink sdlvideosink vcdsrc rfbsrc vdpauyuvvideo vdpauvideoyuv vdpaumpegdec neonhttpsrc"
 
 plugindir = $(libdir)/gstreamer-@GST_MAJORMINOR@
 
@@ -144,7 +144,9 @@ check_PROGRAMS = \
 	elements/autoconvert \
 	elements/asfmux \
 	elements/camerabin \
+	elements/camerabin2 \
 	elements/dataurisrc \
+	elements/imagecapturebin \
 	elements/legacyresample \
         $(check_jifmux) \
 	elements/jpegparse \
@@ -159,7 +161,8 @@ check_PROGRAMS = \
 	elements/rtpmux \
 	$(check_vp8) \
 	$(check_orc) \
-        pipelines/tagschecking
+	pipelines/tagschecking \
+	elements/viewfinderbin
 
 noinst_HEADERS = elements/mxfdemux.h elements/amrparse_data.h elements/aacparse_data.h
 
@@ -179,6 +182,24 @@ elements_camerabin_LDADD = \
         $(GST_CHECK_LIBS) \
          -lgstinterfaces-@GST_MAJORMINOR@
 elements_camerabin_SOURCES = elements/camerabin.c
+
+elements_camerabin2_CFLAGS = \
+  $(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
+  $(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS) -DGST_USE_UNSTABLE_API
+elements_camerabin2_LDADD = \
+        $(top_builddir)/gst-libs/gst/interfaces/libgstphotography-@GST_MAJORMINOR@.la \
+        $(top_builddir)/gst-libs/gst/basecamerabinsrc/libgstbasecamerabinsrc-@GST_MAJORMINOR@.la \
+        -lgstpbutils-$(GST_MAJORMINOR) \
+        $(GST_PLUGINS_BASE_LIBS) $(GST_BASE_LIBS) $(GST_LIBS) $(LDADD)
+elements_camerabin2_SOURCES = elements/camerabin2.c
+
+elements_imagecapturebin_CFLAGS = \
+  $(GST_PLUGINS_BAD_CFLAGS) $(GST_PLUGINS_BASE_CFLAGS) \
+  $(GST_BASE_CFLAGS) $(GST_CFLAGS) $(AM_CFLAGS) -DGST_USE_UNSTABLE_API
+elements_imagecapturebin_LDADD = \
+  $(GST_PLUGINS_BASE_LIBS) -lgstapp-@GST_MAJORMINOR@ \
+  $(GST_BASE_LIBS) $(GST_LIBS) $(LDADD)
+elements_imagecapturebin_SOURCES = elements/imagecapturebin.c
 
 elements_jifmux_CFLAGS = $(GST_OBJ_CFLAGS) $(GST_CHECK_CFLAGS) $(CHECK_CFLAGS) $(GST_OPTION_CFLAGS) $(AM_CFLAGS) $(EXIF_CFLAGS)
 elements_jifmux_LDADD = $(GST_OBJ_LIBS) $(GST_CHECK_LIBS) $(CHECK_LIBS) $(EXIF_LIBS) $(LDADD)
