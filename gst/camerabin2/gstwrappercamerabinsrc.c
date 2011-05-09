@@ -44,7 +44,7 @@ GST_DEBUG_CATEGORY (wrapper_camera_bin_src_debug);
 #define GST_CAT_DEFAULT wrapper_camera_bin_src_debug
 
 GST_BOILERPLATE (GstWrapperCameraBinSrc, gst_wrapper_camera_bin_src,
-    GstBaseCameraSrc, GST_TYPE_BASE_CAMERA_SRC);
+    GstBaseCameraBinSrc, GST_TYPE_BASE_CAMERA_SRC);
 
 static void set_capsfilter_caps (GstWrapperCameraBinSrc * self,
     GstCaps * new_caps);
@@ -178,7 +178,7 @@ gst_wrapper_camera_bin_src_imgsrc_probe (GstPad * pad, GstBuffer * buffer,
     gpointer data)
 {
   GstWrapperCameraBinSrc *self = GST_WRAPPER_CAMERA_BIN_SRC (data);
-  GstBaseCameraSrc *camerasrc = GST_BASE_CAMERA_SRC (data);
+  GstBaseCameraBinSrc *camerasrc = GST_BASE_CAMERA_SRC (data);
   gboolean ret = FALSE;
 
   GST_LOG_OBJECT (self, "Image probe, mode %d, capture count %d",
@@ -213,7 +213,7 @@ gst_wrapper_camera_bin_src_vidsrc_probe (GstPad * pad, GstBuffer * buffer,
     gpointer data)
 {
   GstWrapperCameraBinSrc *self = GST_WRAPPER_CAMERA_BIN_SRC (data);
-  GstBaseCameraSrc *camerasrc = GST_BASE_CAMERA_SRC_CAST (self);
+  GstBaseCameraBinSrc *camerasrc = GST_BASE_CAMERA_SRC_CAST (self);
   gboolean ret = FALSE;
 
   GST_LOG_OBJECT (self, "Video probe, mode %d, capture status %d",
@@ -300,7 +300,7 @@ static void
 gst_wrapper_camera_bin_src_caps_cb (GObject * gobject, GParamSpec * pspec,
     gpointer user_data)
 {
-  GstBaseCameraSrc *bcamsrc = GST_BASE_CAMERA_SRC (user_data);
+  GstBaseCameraBinSrc *bcamsrc = GST_BASE_CAMERA_SRC (user_data);
   GstWrapperCameraBinSrc *self = GST_WRAPPER_CAMERA_BIN_SRC (user_data);
   GstPad *src_caps_src_pad;
   GstCaps *caps = NULL;
@@ -340,7 +340,7 @@ static void
 gst_wrapper_camera_bin_src_max_zoom_cb (GObject * self, GParamSpec * pspec,
     gpointer user_data)
 {
-  GstBaseCameraSrc *bcamsrc = (GstBaseCameraSrc *) user_data;
+  GstBaseCameraBinSrc *bcamsrc = (GstBaseCameraBinSrc *) user_data;
 
   g_object_get (self, "max-zoom", &bcamsrc->max_zoom, NULL);
   g_object_notify (G_OBJECT (bcamsrc), "max-zoom");
@@ -361,7 +361,7 @@ gst_wrapper_camera_bin_src_max_zoom_cb (GObject * self, GParamSpec * pspec,
  * Returns: TRUE, if elements were successfully created, FALSE otherwise
  */
 static gboolean
-gst_wrapper_camera_bin_src_construct_pipeline (GstBaseCameraSrc * bcamsrc)
+gst_wrapper_camera_bin_src_construct_pipeline (GstBaseCameraBinSrc * bcamsrc)
 {
   GstWrapperCameraBinSrc *self = GST_WRAPPER_CAMERA_BIN_SRC (bcamsrc);
   GstBin *cbin = GST_BIN (bcamsrc);
@@ -539,7 +539,7 @@ copy_missing_fields (GQuark field_id, const GValue * value, gpointer user_data)
 static void
 adapt_image_capture (GstWrapperCameraBinSrc * self, GstCaps * in_caps)
 {
-  GstBaseCameraSrc *bcamsrc = GST_BASE_CAMERA_SRC (self);
+  GstBaseCameraBinSrc *bcamsrc = GST_BASE_CAMERA_SRC (self);
   GstStructure *in_st, *new_st, *req_st;
   gint in_width = 0, in_height = 0, req_width = 0, req_height = 0, crop = 0;
   gdouble ratio_w, ratio_h;
@@ -647,7 +647,7 @@ img_capture_prepared (gpointer data, GstCaps * caps)
 static gboolean
 start_image_capture (GstWrapperCameraBinSrc * self)
 {
-  GstBaseCameraSrc *bcamsrc = GST_BASE_CAMERA_SRC (self);
+  GstBaseCameraBinSrc *bcamsrc = GST_BASE_CAMERA_SRC (self);
   GstPhotography *photography = gst_base_camera_src_get_photography (bcamsrc);
   gboolean ret = FALSE;
   GstCaps *caps;
@@ -686,7 +686,7 @@ start_image_capture (GstWrapperCameraBinSrc * self)
 }
 
 static gboolean
-gst_wrapper_camera_bin_src_set_mode (GstBaseCameraSrc * bcamsrc,
+gst_wrapper_camera_bin_src_set_mode (GstBaseCameraBinSrc * bcamsrc,
     GstCameraBinMode mode)
 {
   GstPhotography *photography = gst_base_camera_src_get_photography (bcamsrc);
@@ -734,7 +734,7 @@ static gboolean
 set_element_zoom (GstWrapperCameraBinSrc * self, gfloat zoom)
 {
   gboolean ret = FALSE;
-  GstBaseCameraSrc *bcamsrc = GST_BASE_CAMERA_SRC (self);
+  GstBaseCameraBinSrc *bcamsrc = GST_BASE_CAMERA_SRC (self);
   gint w2_crop = 0, h2_crop = 0;
   GstPad *pad_zoom_sink = NULL;
   gint left = self->base_crop_left;
@@ -779,7 +779,7 @@ set_element_zoom (GstWrapperCameraBinSrc * self, gfloat zoom)
 }
 
 static void
-gst_wrapper_camera_bin_src_set_zoom (GstBaseCameraSrc * bcamsrc, gfloat zoom)
+gst_wrapper_camera_bin_src_set_zoom (GstBaseCameraBinSrc * bcamsrc, gfloat zoom)
 {
   GstWrapperCameraBinSrc *self = GST_WRAPPER_CAMERA_BIN_SRC (bcamsrc);
 
@@ -796,7 +796,8 @@ gst_wrapper_camera_bin_src_set_zoom (GstBaseCameraSrc * bcamsrc, gfloat zoom)
 }
 
 static GstCaps *
-gst_wrapper_camera_bin_src_get_allowed_input_caps (GstBaseCameraSrc * bcamsrc)
+gst_wrapper_camera_bin_src_get_allowed_input_caps (GstBaseCameraBinSrc *
+    bcamsrc)
 {
   GstWrapperCameraBinSrc *self = GST_WRAPPER_CAMERA_BIN_SRC (bcamsrc);
   GstCaps *caps = NULL;
@@ -976,7 +977,7 @@ set_capsfilter_caps (GstWrapperCameraBinSrc * self, GstCaps * new_caps)
 }
 
 static gboolean
-gst_wrapper_camera_bin_src_start_capture (GstBaseCameraSrc * camerasrc)
+gst_wrapper_camera_bin_src_start_capture (GstBaseCameraBinSrc * camerasrc)
 {
   GstWrapperCameraBinSrc *src = GST_WRAPPER_CAMERA_BIN_SRC (camerasrc);
 
@@ -1018,7 +1019,7 @@ gst_wrapper_camera_bin_src_start_capture (GstBaseCameraSrc * camerasrc)
 }
 
 static void
-gst_wrapper_camera_bin_src_stop_capture (GstBaseCameraSrc * camerasrc)
+gst_wrapper_camera_bin_src_stop_capture (GstBaseCameraBinSrc * camerasrc)
 {
   GstWrapperCameraBinSrc *src = GST_WRAPPER_CAMERA_BIN_SRC (camerasrc);
 
@@ -1085,7 +1086,7 @@ gst_wrapper_camera_bin_src_class_init (GstWrapperCameraBinSrcClass * klass)
 {
   GObjectClass *gobject_class;
   GstElementClass *gstelement_class;
-  GstBaseCameraSrcClass *gstbasecamerasrc_class;
+  GstBaseCameraBinSrcClass *gstbasecamerasrc_class;
 
   gobject_class = G_OBJECT_CLASS (klass);
   gstelement_class = GST_ELEMENT_CLASS (klass);

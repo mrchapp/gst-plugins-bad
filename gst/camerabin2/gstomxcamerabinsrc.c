@@ -57,7 +57,7 @@ GST_DEBUG_CATEGORY (omx_camera_bin_src_debug);
 #define GST_CAT_DEFAULT omx_camera_bin_src_debug
 
 GST_BOILERPLATE (GstOmxCameraBinSrc, gst_omx_camera_bin_src,
-    GstBaseCameraSrc, GST_TYPE_BASE_CAMERA_SRC);
+    GstBaseCameraBinSrc, GST_TYPE_BASE_CAMERA_SRC);
 
 static void set_capsfilter_caps (GstOmxCameraBinSrc * self, GstCaps * new_caps);
 
@@ -169,7 +169,7 @@ gst_omx_camera_bin_src_imgsrc_probe (GstPad * pad, GstBuffer * buffer,
     gpointer data)
 {
   GstOmxCameraBinSrc *self = GST_OMX_CAMERA_BIN_SRC (data);
-  GstBaseCameraSrc *camerasrc = GST_BASE_CAMERA_SRC (data);
+  GstBaseCameraBinSrc *camerasrc = GST_BASE_CAMERA_SRC (data);
   gboolean ret = FALSE;
 
   GST_LOG_OBJECT (self, "Image probe, mode %d, capture count %d",
@@ -204,7 +204,7 @@ gst_omx_camera_bin_src_vidsrc_probe (GstPad * pad, GstBuffer * buffer,
     gpointer data)
 {
   GstOmxCameraBinSrc *self = GST_OMX_CAMERA_BIN_SRC (data);
-  GstBaseCameraSrc *camerasrc = GST_BASE_CAMERA_SRC_CAST (self);
+  GstBaseCameraBinSrc *camerasrc = GST_BASE_CAMERA_SRC_CAST (self);
   gboolean ret = FALSE;
 
   GST_LOG_OBJECT (self, "Video probe, mode %d, capture status %d",
@@ -299,7 +299,7 @@ static void
 gst_omx_camera_bin_src_caps_cb (GObject * gobject, GParamSpec * pspec,
     gpointer user_data)
 {
-  GstBaseCameraSrc *bcamsrc = GST_BASE_CAMERA_SRC (user_data);
+  GstBaseCameraBinSrc *bcamsrc = GST_BASE_CAMERA_SRC (user_data);
   GstOmxCameraBinSrc *self = GST_OMX_CAMERA_BIN_SRC (user_data);
   GstPad *src_caps_src_pad;
   GstCaps *caps = NULL;
@@ -380,7 +380,7 @@ gst_omx_camera_pad_added_cb (GstElement * element,
  * Returns: TRUE, if elements were successfully created, FALSE otherwise
  */
 static gboolean
-gst_omx_camera_bin_src_construct_pipeline (GstBaseCameraSrc * bcamsrc)
+gst_omx_camera_bin_src_construct_pipeline (GstBaseCameraBinSrc * bcamsrc)
 {
   GstOmxCameraBinSrc *self = GST_OMX_CAMERA_BIN_SRC (bcamsrc);
   GstBin *cbin = GST_BIN (bcamsrc);
@@ -469,7 +469,7 @@ done:
 }
 
 static gboolean
-gst_omx_camera_bin_src_set_mode (GstBaseCameraSrc * bcamsrc,
+gst_omx_camera_bin_src_set_mode (GstBaseCameraBinSrc * bcamsrc,
     GstCameraBinMode mode)
 {
   GstPhotography *photography = gst_base_camera_src_get_photography (bcamsrc);
@@ -502,7 +502,7 @@ gst_omx_camera_bin_src_set_mode (GstBaseCameraSrc * bcamsrc,
 }
 
 static void
-gst_omx_camera_bin_src_set_zoom (GstBaseCameraSrc * bcamsrc, gfloat zoom)
+gst_omx_camera_bin_src_set_zoom (GstBaseCameraBinSrc * bcamsrc, gfloat zoom)
 {
   GstOmxCameraBinSrc *self = GST_OMX_CAMERA_BIN_SRC (bcamsrc);
 
@@ -512,7 +512,7 @@ gst_omx_camera_bin_src_set_zoom (GstBaseCameraSrc * bcamsrc, gfloat zoom)
 }
 
 static GstCaps *
-gst_omx_camera_bin_src_get_allowed_input_caps (GstBaseCameraSrc * bcamsrc)
+gst_omx_camera_bin_src_get_allowed_input_caps (GstBaseCameraBinSrc * bcamsrc)
 {
   GstOmxCameraBinSrc *self = GST_OMX_CAMERA_BIN_SRC (bcamsrc);
   GstCaps *caps = NULL;
@@ -597,7 +597,7 @@ set_capsfilter_caps (GstOmxCameraBinSrc * self, GstCaps * new_caps)
 }
 
 static gboolean
-gst_omx_camera_bin_src_start_capture (GstBaseCameraSrc * camerasrc)
+gst_omx_camera_bin_src_start_capture (GstBaseCameraBinSrc * camerasrc)
 {
   GstOmxCameraBinSrc *src = GST_OMX_CAMERA_BIN_SRC (camerasrc);
 
@@ -636,7 +636,7 @@ gst_omx_camera_bin_src_start_capture (GstBaseCameraSrc * camerasrc)
 }
 
 static void
-gst_omx_camera_bin_src_stop_capture (GstBaseCameraSrc * camerasrc)
+gst_omx_camera_bin_src_stop_capture (GstBaseCameraBinSrc * camerasrc)
 {
   GstOmxCameraBinSrc *src = GST_OMX_CAMERA_BIN_SRC (camerasrc);
 
@@ -703,7 +703,7 @@ gst_omx_camera_bin_src_class_init (GstOmxCameraBinSrcClass * klass)
 {
   GObjectClass *gobject_class;
   GstElementClass *gstelement_class;
-  GstBaseCameraSrcClass *gstbasecamerasrc_class;
+  GstBaseCameraBinSrcClass *gstbasecamerasrc_class;
 
   gobject_class = G_OBJECT_CLASS (klass);
   gstelement_class = GST_ELEMENT_CLASS (klass);

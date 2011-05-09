@@ -51,7 +51,7 @@ typedef struct _GstOmxCameraBinSrcClass GstOmxCameraBinSrcClass;
  */
 struct _GstOmxCameraBinSrc
 {
-  GstBaseCameraSrc parent;
+  GstBaseCameraBinSrc parent;
 
   GstCameraBinMode mode;
 
@@ -98,7 +98,7 @@ struct _GstOmxCameraBinSrc
  */
 struct _GstOmxCameraBinSrcClass
 {
-  GstBaseCameraSrcClass parent;
+  GstBaseCameraBinSrcClass parent;
 };
 
 gboolean gst_omx_camera_bin_src_plugin_init (GstPlugin * plugin);
