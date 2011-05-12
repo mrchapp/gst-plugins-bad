@@ -505,10 +505,15 @@ static void
 gst_omx_camera_bin_src_set_zoom (GstBaseCameraBinSrc * bcamsrc, gfloat zoom)
 {
   GstOmxCameraBinSrc *self = GST_OMX_CAMERA_BIN_SRC (bcamsrc);
+  gint omx_zoom;
 
   GST_INFO_OBJECT (self, "setting zoom %f", zoom);
 
-//  g_object_set (G_OBJECT (self->video_source), "zoom", (gint) (zoom * 100), NULL);
+  omx_zoom = zoom * 80;
+  if (omx_zoom < 100)
+    omx_zoom = 100;
+
+  g_object_set (G_OBJECT (self->video_source), "zoom", omx_zoom, NULL);
 }
 
 static GstCaps *
