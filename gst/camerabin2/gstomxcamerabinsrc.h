@@ -67,15 +67,13 @@ struct _GstOmxCameraBinSrc
 
   /* source elements */
   GstElement *video_source;
-  GstElement *src_filter;
-
+  GstElement *vfsrc_filter;
   GstElement *vfsrc_stride;
+  GstElement *vidsrc_filter;
   GstElement *vidsrc_stride;
   GstElement *imgsrc_stride;
 
   gboolean elements_created;
-
-  guint src_event_probe_id;
 
   GstPadEventFunction srcpad_event_func;
 
@@ -87,8 +85,6 @@ struct _GstOmxCameraBinSrc
 
   /* Caps applied to capsfilters when taking still image */
   GstCaps *image_capture_caps;
-  gboolean image_renegotiate;
-  gboolean video_renegotiate;
 };
 
 
